@@ -367,8 +367,6 @@ A: Check the browser console for errors. Common issues include:
 
 ## 🎉 Get Started Today!
 
-[![Star this repo](https://img.shields.io/badge/Star-this-repo-blueviolet)](https://github.com/utkarshgupta/meowtv/stargazers)
-
 Join the MeowTV community and help build the future of streaming!
 
 🐱 **MeowTV - Where every stream is a purr-fect experience!** 🐱

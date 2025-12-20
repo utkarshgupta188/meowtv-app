@@ -30,6 +30,12 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# local debug artifacts
+out.log
+meowtv_*dump*.json
+meowtv_details_dump.json
+meowtv_stream_dump_*.json
+
 # env files (can opt-in for committing if needed)
 .env*
 

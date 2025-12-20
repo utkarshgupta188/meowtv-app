@@ -16,8 +16,16 @@ export default function ProviderSwitcher() {
         const newProvider = e.target.value;
         setProvider(newProvider);
         await setProviderAction(newProvider);
-        router.refresh();
-        window.location.reload(); // Force reload to ensure all data is re-fetched
+
+        // If the user switches provider while on a watch page,
+        // always exit playback and go back to Home.
+        // Use a hard navigation so server components pick up the new cookie immediately.
+        if (typeof window !== 'undefined') {
+            window.location.assign('/');
+            return;
+        }
+
+        router.push('/');
     };
 
     return (

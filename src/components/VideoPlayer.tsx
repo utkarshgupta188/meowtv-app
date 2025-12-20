@@ -35,6 +35,7 @@ export default function VideoPlayer({
     });
 
     const videoRef = useRef<HTMLVideoElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
     const plyrRef = useRef<any>(null);
     const hlsRef = useRef<Hls | null>(null);
     const hlsMediaErrorCountRef = useRef(0);
@@ -381,6 +382,37 @@ export default function VideoPlayer({
         }
     }, [currentAudio, currentQuality, displayAudioTracks, displayQualityOptions, useInternalQuality]);
 
+    const toggleFullscreen = async () => {
+        const plyr = plyrRef.current;
+        // Prefer Plyr's fullscreen handling so its controls remain visible.
+        if (plyr?.fullscreen?.enabled) {
+            plyr.fullscreen.toggle();
+            return;
+        }
+
+        if (document.fullscreenElement) {
+            await document.exitFullscreen();
+            return;
+        }
+
+        const container = containerRef.current;
+        if (container?.requestFullscreen) {
+            await container.requestFullscreen();
+            return;
+        }
+
+        const video = videoRef.current as any;
+        if (video?.requestFullscreen) {
+            await video.requestFullscreen();
+            return;
+        }
+
+        // iOS Safari fallback
+        if (video?.webkitEnterFullscreen) {
+            video.webkitEnterFullscreen();
+        }
+    };
+
     // Add keyboard controls
     useEffect(() => {
         const handleKeyPress = (e: KeyboardEvent) => {
@@ -420,11 +452,7 @@ export default function VideoPlayer({
                 case 'f':
                 case 'F':
                     e.preventDefault();
-                    if (document.fullscreenElement) {
-                        document.exitFullscreen();
-                    } else {
-                        video.requestFullscreen();
-                    }
+                    void toggleFullscreen();
                     break;
             }
         };
@@ -442,14 +470,14 @@ export default function VideoPlayer({
 
     if (!isMounted) {
         return (
-            <div className="player-container player-shell">
+            <div className="player-container player-shell" ref={containerRef}>
                 {/* Fallback/Loading state */}
             </div>
         );
     }
 
     return (
-        <div className="player-container player-shell">
+        <div className="player-container player-shell" ref={containerRef}>
             <video
                 ref={videoRef}
                 crossOrigin="anonymous"

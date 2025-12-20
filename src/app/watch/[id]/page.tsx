@@ -1,6 +1,7 @@
 import { fetchDetails, fetchStreamUrl } from '@/lib/api';
 import VideoPlayer from '@/components/VideoPlayer';
 import SeasonSwitcher from '@/components/SeasonSwitcher';
+import { cookies } from 'next/headers';
 
 export default async function WatchPage({
     params,
@@ -9,6 +10,10 @@ export default async function WatchPage({
     params: Promise<{ id: string }>;
     searchParams: Promise<{ ep?: string; season?: string }>;
 }) {
+    const cookieStore = await cookies();
+    const providerName = cookieStore.get('provider')?.value;
+    const showOpenDownload = providerName !== 'MeowVerse';
+
     const { id } = await params;
 
     // Fetch details
@@ -41,6 +46,9 @@ export default async function WatchPage({
         .filter(n => Number.isFinite(n))
         .sort((a, b) => a - b);
 
+    const totalEpisodes = details.episodes?.length ?? 0;
+    const showEpisodeUi = seasonNumbers.length > 1 || totalEpisodes > 1;
+
     const requestedSeason = season ? Number.parseInt(season, 10) : undefined;
     const safeSeason =
         requestedSeason && seasonNumbers.includes(requestedSeason)
@@ -68,20 +76,15 @@ export default async function WatchPage({
             // and MUST send languageId for the specific track we want to play.
             let languageId: number | undefined;
             if (currentEpisode.tracks && currentEpisode.tracks.length > 0) {
-                // Determine if we need to send a language ID (CastleTV specific logic handled by provider or here?)
-                // Since the Provider interface abstracts this, we pass the languageId if known.
-                // However, our Provider interface expects us to pass languageId. 
-                // Let's rely on the track data.
-
-                // For CastleTV specifically, we need to know about "existIndividualVideo".
-                // But that property is not on the generic Track interface.
-                // We can cast or check for it safely if we want to keep that logic, 
-                // OR we can make the CastleTvProvider handle the "smart" selection internally?
-                // Actually, fetchStreamUrl takes `languageId`. 
-                // Let's implement basic selection: use the first track's ID if available.
-
-                // For generic providers, languageId might be undefined.
-                languageId = currentEpisode.tracks[0].languageId;
+                const tracksAny = currentEpisode.tracks as any[];
+                const hasIndividualVideo = tracksAny.some(t => t?.existIndividualVideo === true);
+                if (hasIndividualVideo) {
+                    const defaultTrack = tracksAny.find(t => t?.isDefault) || tracksAny[0];
+                    languageId = defaultTrack?.languageId;
+                } else {
+                    // Kotlin provider avoids languageId when existIndividualVideo is false.
+                    languageId = undefined;
+                }
             }
 
             // Use sourceMovieId (Season ID) if available, otherwise main ID
@@ -102,10 +105,10 @@ export default async function WatchPage({
     })) || [];
 
     const audioTracks = videoData?.audioTracks?.map(t => ({
-        languageId: t.languageId || 0,
+        languageId: t.languageId ?? '',
         name: t.name
     })) || currentEpisode?.tracks?.map(t => ({
-        languageId: t.languageId || 0,
+        languageId: t.languageId ?? '',
         name: t.name
     })) || [];
 
@@ -121,11 +124,12 @@ export default async function WatchPage({
                     audioTracks={audioTracks}
                     movieId={currentEpisode?.sourceMovieId || details.id}
                     episodeId={currentEpisode!.id}
-                    languageId={currentEpisode?.tracks?.[0]?.languageId}
+                    languageId={videoData?.audioTracks?.[0]?.languageId ?? currentEpisode?.tracks?.[0]?.languageId}
+                    showOpenDownload={showOpenDownload}
                 />
             ) : (
-                <div className="player-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <p>No stream available or error fetching stream.</p>
+                <div className="player-container player-shell player-empty center">
+                    <p className="muted">No stream available or error fetching stream.</p>
                 </div>
             )}
 
@@ -133,11 +137,13 @@ export default async function WatchPage({
                 <h1 className="details-title">{details.title}</h1>
                 <div className="details-meta">
                     {details.year} • {details.score}
-                    {currentEpisode && <span> • {currentEpisode.title || `Episode ${currentEpisode.number}`}</span>}
+                    {showEpisodeUi && currentEpisode && (
+                        <span> • {currentEpisode.title || `Episode ${currentEpisode.number}`}</span>
+                    )}
                 </div>
                 <p>{details.description}</p>
 
-                {seasonNumbers.length > 0 && (
+                {showEpisodeUi && seasonNumbers.length > 0 && (
                     <SeasonSwitcher
                         showId={id}
                         selectedSeason={selectedSeason}
@@ -149,10 +155,12 @@ export default async function WatchPage({
                     />
                 )}
 
-                {Object.keys(episodesBySeason).length > 0 && (
+                {showEpisodeUi && Object.keys(episodesBySeason).length > 0 && (
                     <div className="episode-list">
                         <div>
-                            <h3 style={{ marginTop: '10px', marginBottom: '10px' }}>Season {selectedSeason}</h3>
+                            <h3 className="subsection-header">
+                                Season {selectedSeason}
+                            </h3>
                             <div className="episode-grid">
                                 {episodesBySeason[selectedSeason]?.map(epItem => (
                                     <a

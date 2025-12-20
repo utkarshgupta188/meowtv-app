@@ -20,6 +20,8 @@ export default function SeasonSwitcher({
 }) {
     const router = useRouter();
 
+    const selectId = `season-select-${showId}`;
+
     const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         const season = Number(e.target.value);
         const firstEp = options.find(o => o.season === season)?.firstEpisodeId;
@@ -35,20 +37,15 @@ export default function SeasonSwitcher({
     if (options.length <= 1) return null;
 
     return (
-        <div style={{ marginTop: '16px', marginBottom: '10px', display: 'flex', gap: '10px', alignItems: 'center' }}>
-            <div style={{ color: '#ccc', fontSize: '14px' }}>Season</div>
+        <div className="control-row control-row--spaced">
+            <label className="control-label" htmlFor={selectId}>
+                Season
+            </label>
             <select
+                id={selectId}
                 value={selectedSeason}
                 onChange={handleChange}
-                style={{
-                    background: '#333',
-                    color: 'white',
-                    padding: '5px 10px',
-                    borderRadius: '4px',
-                    border: '1px solid #555',
-                    outline: 'none',
-                    cursor: 'pointer'
-                }}
+                className="select"
             >
                 {options.map(o => (
                     <option key={o.season} value={o.season}>

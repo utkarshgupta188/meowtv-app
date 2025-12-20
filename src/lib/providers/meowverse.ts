@@ -64,7 +64,7 @@ async function bypass(mainUrl: string): Promise<string> {
     }
 }
 
-export const CncVerseProvider: Provider = {
+export const MeowVerseProvider: Provider = {
     name: 'MeowVerse',
 
     async fetchHome(page: number): Promise<HomePageRow[]> {
@@ -151,6 +151,40 @@ export const CncVerseProvider: Provider = {
             const res = await fetch(url, { headers });
             const data = await res.json();
 
+            // CNCVerse exposes available audio languages via post.php:
+            // - d_lang: default language code (usually "eng")
+            // - lang: array like [{ l: "Hindi", s: "hin" }, ...]
+            // These are real options from the provider (not guessed, not derived from HLS manifests).
+            const audioTracksFromPost = (() => {
+                const tracks: Array<{ name: string; languageId: string; isDefault?: boolean }> = [];
+
+                // Keep an explicit "Default" option that maps to empty audioParam (no language.php POST).
+                tracks.push({ name: 'Default', languageId: '', isDefault: true });
+
+                const langList: any[] = Array.isArray(data?.lang) ? data.lang : [];
+                for (const entry of langList) {
+                    const code = String(entry?.s ?? '').trim();
+                    const label = String(entry?.l ?? '').trim();
+                    if (!code) continue;
+                    // "und" is shown as "Unknown" and isn't a meaningful selectable audio.
+                    if (code.toLowerCase() === 'und') continue;
+
+                    tracks.push({
+                        name: label || code,
+                        languageId: code,
+                        isDefault: false,
+                    });
+                }
+
+                // De-dupe by languageId while preserving order.
+                const seen = new Set<string>();
+                return tracks.filter(t => {
+                    if (seen.has(t.languageId)) return false;
+                    seen.add(t.languageId);
+                    return true;
+                });
+            })();
+
             const episodes: Episode[] = [];
 
             if (data.episodes && data.episodes[0]) {
@@ -163,7 +197,7 @@ export const CncVerseProvider: Provider = {
                         number: parseInt(ep.ep?.replace('E', '') || '1'),
                         coverImage: `https://imgcdn.kim/epimg/150/${ep.id}.jpg`,
                         sourceMovieId: id,
-                        tracks: [{ name: 'Default', url: '', isDefault: true }]
+                        tracks: audioTracksFromPost as any
                     });
                 });
 
@@ -187,7 +221,7 @@ export const CncVerseProvider: Provider = {
                                         number: parseInt(ep.ep?.replace('E', '') || '1'),
                                         coverImage: `https://imgcdn.kim/epimg/150/${ep.id}.jpg`,
                                         sourceMovieId: id,
-                                        tracks: [{ name: 'Default', url: '', isDefault: true }]
+                                        tracks: audioTracksFromPost as any
                                     });
                                 });
                             }
@@ -203,7 +237,7 @@ export const CncVerseProvider: Provider = {
                     number: 1,
                     season: 1,
                     sourceMovieId: id,
-                    tracks: [{ name: 'Default', url: '', isDefault: true }]
+                    tracks: audioTracksFromPost as any
                 });
             }
 
@@ -266,8 +300,9 @@ export const CncVerseProvider: Provider = {
             };
 
             // Initial cookies
-            let streamCookies = `t_hash_t=${cookieValue}; ott=nf; hd=on`;
-            const referer = `${MAIN_URL}/home`;
+            // user_token is required for some endpoints to behave like the logged-in web app.
+            let streamCookies = `t_hash_t=${cookieValue}; ott=nf; hd=on; user_token=233123f803cf02184bf6c67e149cdd50`;
+            const refererNet20 = `${MAIN_URL}/home`;
 
             if (audioParam) {
                 // Step 1: POST to language.php (Net20)
@@ -278,7 +313,7 @@ export const CncVerseProvider: Provider = {
                             ...HEADERS,
                             'Cookie': streamCookies,
                             'Content-Type': 'application/x-www-form-urlencoded',
-                            'Referer': referer
+                            'Referer': refererNet20
                         },
                         body: `lang=${audioParam}`
                     });
@@ -287,60 +322,65 @@ export const CncVerseProvider: Provider = {
                 } catch (e) {
                     console.error('[CNC Verse] Language POST failed:', e);
                 }
+            }
 
-                // Step 2: POST to play.php (Net20) to get transfer hash
-                let hashParams = '';
+            // Step 2: POST to play.php (Net20) to get transfer hash
+            // Important: this appears to be required even for default audio (otherwise net51 playlist may reply "Video ID not found!").
+            let hashParams = '';
+            try {
+                console.log('[CNC Verse] Step 2: Getting transfer hash from play.php');
+                const playUrl = `${MAIN_URL}/play.php`;
+                const playPostRes = await fetch(playUrl, {
+                    method: 'POST',
+                    headers: {
+                        ...HEADERS,
+                        'Cookie': streamCookies,
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Referer': refererNet20,
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: `id=${episodeId}`
+                });
+
+                streamCookies = mergeCookies(streamCookies, playPostRes.headers.get('set-cookie'));
+
+                const playText = await playPostRes.text();
                 try {
-                    console.log('[CNC Verse] Step 2: Getting transfer hash from play.php');
-                    const playUrl = `${MAIN_URL}/play.php`;
-                    const playPostRes = await fetch(playUrl, {
-                        method: 'POST',
+                    const playData = JSON.parse(playText);
+                    console.log('[CNC Verse] Play response:', playData);
+                    if (playData && playData.h) {
+                        hashParams = `&${playData.h}`;
+                    }
+                } catch (e) {
+                    console.warn('[CNC Verse] Play response was not JSON');
+                }
+            } catch (e) {
+                console.error('[CNC Verse] Play POST failed:', e);
+            }
+
+            // Step 3: GET play.php (Net51) with hash to set session
+            if (hashParams) {
+                try {
+                    console.log('[CNC Verse] Step 3: Transferring session to net51.cc');
+                    const playGetUrl = `${NEW_URL}/play.php?id=${episodeId}${hashParams}`;
+
+                    const playGetRes = await fetch(playGetUrl, {
                         headers: {
                             ...HEADERS,
                             'Cookie': streamCookies,
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                            'Referer': referer,
-                            'X-Requested-With': 'XMLHttpRequest'
+                            'Referer': refererNet20
                         },
-                        body: `id=${episodeId}`
+                        redirect: 'manual'
                     });
 
-                    streamCookies = mergeCookies(streamCookies, playPostRes.headers.get('set-cookie'));
+                    console.log('[CNC Verse] Step 3 status:', playGetRes.status);
+                    streamCookies = mergeCookies(streamCookies, playGetRes.headers.get('set-cookie'));
 
-                    const playText = await playPostRes.text();
-                    try {
-                        const playData = JSON.parse(playText);
-                        console.log('[CNC Verse] Play response:', playData);
-                        if (playData && playData.h) {
-                            hashParams = `&${playData.h}`;
-                        }
-                    } catch (e) { }
                 } catch (e) {
-                    console.error('[CNC Verse] Play POST failed:', e);
+                    console.error('[CNC Verse] Session transfer failed:', e);
                 }
-
-                // Step 3: GET play.php (Net51) with hash to set session
-                if (hashParams) {
-                    try {
-                        console.log('[CNC Verse] Step 3: Transferring session to net51.cc');
-                        const playGetUrl = `${NEW_URL}/play.php?id=${episodeId}${hashParams}`;
-
-                        const playGetRes = await fetch(playGetUrl, {
-                            headers: {
-                                ...HEADERS,
-                                'Cookie': streamCookies,
-                                'Referer': referer
-                            },
-                            redirect: 'manual'
-                        });
-
-                        console.log('[CNC Verse] Step 3 status:', playGetRes.status);
-                        streamCookies = mergeCookies(streamCookies, playGetRes.headers.get('set-cookie'));
-
-                    } catch (e) {
-                        console.error('[CNC Verse] Session transfer failed:', e);
-                    }
-                }
+            } else {
+                console.warn('[CNC Verse] No transfer hash; continuing anyway');
             }
 
             // Step 4: Fetch playlist from net51.cc
@@ -351,19 +391,30 @@ export const CncVerseProvider: Provider = {
             const headers = {
                 ...HEADERS,
                 'Cookie': streamCookies,
-                'Referer': `${MAIN_URL}/home`
+                'Referer': `${NEW_URL}/home`
             };
 
-            const res = await fetch(url, { headers });
-            const resText = await res.text();
-            let playlist;
+            let resText = await (await fetch(url, { headers })).text();
+            let playlistBaseUrl = NEW_URL;
+            let playlistReferer = `${NEW_URL}/`;
 
-            try {
-                playlist = JSON.parse(resText);
-            } catch (e) {
-                console.error('[CNC Verse] Failed to parse playlist JSON. Response start:', resText.substring(0, 500));
-                return null;
+            // Fallback: sometimes net51 returns plain text like "Video ID not found!".
+            // Try net20 playlist endpoint as a backup.
+            if (/Video ID not found!/i.test(resText)) {
+                console.warn('[CNC Verse] net51 playlist says Video ID not found; trying net20 fallback');
+                const url2 = `${MAIN_URL}/tv/playlist.php?id=${episodeId}&t=${audioParam}&tm=${time}`;
+                resText = await (await fetch(url2, {
+                    headers: {
+                        ...HEADERS,
+                        'Cookie': streamCookies,
+                        'Referer': refererNet20
+                    }
+                })).text();
+                playlistBaseUrl = MAIN_URL;
+                playlistReferer = `${MAIN_URL}/`;
             }
+
+            let playlist;
 
             try {
                 playlist = JSON.parse(resText);
@@ -376,41 +427,77 @@ export const CncVerseProvider: Provider = {
                 const item = playlist[0];
                 const sources = item.sources || [];
 
-                // Debug: Log all tracks
-                console.log('[CNC Verse] All tracks:', item.tracks);
+                const tracks: any[] = Array.isArray(item.tracks) ? item.tracks : [];
 
-                // TESTING: Hardcode audio languages to test which params work
-                const audioTracks: any[] = [
-                    { languageId: '', name: 'English (Default)' },
-                    { languageId: 'hin', name: 'Hindi' },
-                    { languageId: 'tam', name: 'Tamil' },
-                    { languageId: 'tel', name: 'Telugu' }
-                ];
-                console.log('[CNC Verse] Hardcoded audio tracks for testing:', audioTracks);
+                // Debug: Log all tracks
+                console.log('[CNC Verse] All tracks:', tracks);
+
+                // Audio languages should come from the stream itself (HLS #EXT-X-MEDIA TYPE=AUDIO).
+                // We deliberately do NOT return a premade list here.
 
 
                 if (sources.length > 0) {
+                    // Important: many streams/variants/tracks require the same session cookies used for playlist.php.
+                    // We pass them via the /api/hls proxy since browsers can't set arbitrary Cookie headers.
+                    const cookieParam = encodeURIComponent(streamCookies);
+
                     // Use first source as default (usually highest quality)
                     const defaultSource = sources[0];
-                    const m3u8Url = `${NEW_URL}${defaultSource.file.replace('/tv/', '/')}`;
-                    const proxyUrl = `/api/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(NEW_URL + '/')}&cookie=hd=on`;
+                    const sourceFile = String(defaultSource.file ?? '');
+                    const m3u8Url = sourceFile.startsWith('http')
+                        ? sourceFile
+                        : `${playlistBaseUrl}${sourceFile.replace('/tv/', '/')}`;
+                    const proxyUrl = `/api/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(playlistReferer)}&cookie=${cookieParam}`;
 
                     return {
                         videoUrl: proxyUrl,
-                        subtitles: item.tracks?.filter((t: any) => t.kind === 'captions').map((t: any) => {
-                            // Fix protocol-relative URLs
-                            const subUrl = t.file.startsWith('//') ? `https:${t.file}` : t.file;
-                            return {
-                                language: t.label,
-                                label: t.label,
-                                url: `/api/hls?url=${encodeURIComponent(subUrl)}`
-                            };
-                        }),
+                        subtitles: tracks
+                            .filter((t: any) => {
+                                const kind = String(t?.kind ?? '').toLowerCase();
+                                const file = String(t?.file ?? '').toLowerCase();
+                                // CNCVerse often includes "thumbnails" VTT which are NOT captions.
+                                if (kind.includes('thumb')) return false;
+                                return (
+                                    kind.includes('caption') ||
+                                    kind.includes('sub') ||
+                                    ((file.endsWith('.vtt') || file.endsWith('.srt')) && !kind)
+                                );
+                            })
+                            .map((t: any) => {
+                                const rawFile = String(t?.file ?? '');
+                                const rawLang = String(t?.srclang ?? t?.lang ?? t?.language ?? '').trim();
+                                const label = String(t?.label ?? t?.name ?? rawLang ?? 'Subtitles');
+                                const inferLang = (lbl: string) => {
+                                    const s = lbl.toLowerCase();
+                                    if (s.includes('english')) return 'en';
+                                    if (s.includes('hindi')) return 'hi';
+                                    if (s.includes('tamil')) return 'ta';
+                                    if (s.includes('telugu')) return 'te';
+                                    if (s.includes('malayalam')) return 'ml';
+                                    if (s.includes('kannada')) return 'kn';
+                                    if (s.includes('bengali')) return 'bn';
+                                    return '';
+                                };
+                                const language = rawLang || inferLang(label) || 'en';
+                                // Fix protocol-relative / relative URLs
+                                let subUrl = rawFile;
+                                if (subUrl.startsWith('//')) subUrl = `https:${subUrl}`;
+                                if (subUrl && !subUrl.startsWith('http')) subUrl = `${playlistBaseUrl}${subUrl}`;
+                                return {
+                                    language,
+                                    label,
+                                    url: `/api/hls?url=${encodeURIComponent(subUrl)}&referer=${encodeURIComponent(playlistReferer)}&cookie=${cookieParam}`
+                                };
+                            })
+                            .filter((s: any) => Boolean(s.url)),
                         qualities: sources.map((s: any) => ({
                             quality: s.label || 'Auto',
-                            url: `/api/hls?url=${encodeURIComponent(NEW_URL + s.file.replace('/tv/', '/'))}&referer=${encodeURIComponent(NEW_URL + '/')}&cookie=hd=on`
+                            url: (() => {
+                                const file = String(s?.file ?? '');
+                                const abs = file.startsWith('http') ? file : `${playlistBaseUrl}${file.replace('/tv/', '/')}`;
+                                return `/api/hls?url=${encodeURIComponent(abs)}&referer=${encodeURIComponent(playlistReferer)}&cookie=${cookieParam}`;
+                            })()
                         })),
-                        audioTracks: audioTracks,
                         headers: {}
                     };
                 }

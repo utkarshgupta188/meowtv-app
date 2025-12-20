@@ -2,20 +2,20 @@
 
 import { cookies } from 'next/headers';
 
-import { CncVerseProvider } from './providers/cncverse';
+import { MeowVerseProvider } from './providers/meowverse';
 import { Provider, HomePageRow, ContentItem, MovieDetails, VideoResponse } from './providers/types';
 
-import { CastleTvProvider } from './providers/castletv';
-import { XonProvider } from './providers/xon';
+import { MeowTvProvider } from './providers/meowtv';
+import { MeowToonProvider } from './providers/meowtoon';
 
 // Registry
 const PROVIDERS: Record<string, Provider> = {
-    'MeowMov': CastleTvProvider,
-    'MeowVerse': CncVerseProvider,
-    'MeowToon': XonProvider
+    'MeowTV': MeowTvProvider,
+    'MeowVerse': MeowVerseProvider,
+    'MeowToon': MeowToonProvider
 };
 
-const DEFAULT_PROVIDER = 'MeowMov';
+const DEFAULT_PROVIDER = 'MeowTV';
 
 async function getProvider(): Promise<Provider> {
     const cookieStore = await cookies();

@@ -84,7 +84,7 @@ function parseContentId(raw: string): { type: 'movie' | 'series'; identifier: st
     return null;
 }
 
-export const XonProvider: Provider = {
+export const MeowToonProvider: Provider = {
     name: 'MeowToon',
 
     async fetchHome(page: number): Promise<HomePageRow[]> {

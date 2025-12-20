@@ -3,7 +3,7 @@ import { decryptData } from '../crypto';
 
 const MAIN_URL = 'https://api.hlowb.com';
 
-// Internal types for CastleTV API responses
+// Internal types for MeowTV (Castle) API responses
 interface CastleApiResponse { code: number; msg: string; data: string | null; }
 interface SecurityKeyResponse { code: number; msg: string; data: string; }
 interface DecryptedResponse<T> { code: number; msg: string; data: T; }
@@ -20,8 +20,8 @@ async function getSecurityKey(): Promise<{ key: string | null; cookie: string | 
     }
 }
 
-export const CastleTvProvider: Provider = {
-    name: 'MeowMov',
+export const MeowTvProvider: Provider = {
+    name: 'MeowTV',
 
     async fetchHome(page: number): Promise<HomePageRow[]> {
         const { key } = await getSecurityKey();
@@ -156,6 +156,10 @@ export const CastleTvProvider: Provider = {
         if (!key) return null;
 
         const resolutions = [3, 2, 1];
+        const collectedQualities: { quality: string; url: string }[] = [];
+        let bestVideoUrl: string | null = null;
+        let bestSubtitles: { language: string; url: string; label: string }[] = [];
+
         for (const resolution of resolutions) {
             const url = `${MAIN_URL}/film-api/v2.0.1/movie/getVideo2?clientType=1&packageName=com.external.castle&channel=IndiaA&lang=en-US`;
             const body = {
@@ -178,15 +182,39 @@ export const CastleTvProvider: Provider = {
 
                 const data = JSON.parse(decryptedJson).data;
                 if (data && data.videoUrl) {
-                    return {
-                        videoUrl: data.videoUrl,
-                        subtitles: data.subtitles?.map((s: any) => ({ language: s.abbreviate || s.title, url: s.url, label: s.title })) || [],
-                        qualities: data.videos?.map((v: any) => ({ quality: v.resolutionDescription || `${v.resolution}p`, url: '' })), // Qualities are internal to HLS usually
-                        headers: { 'Referer': MAIN_URL }
-                    };
+                    const qualityLabel =
+                        resolution === 3 ? '1080p' :
+                            resolution === 2 ? '720p' :
+                                resolution === 1 ? '480p' :
+                                    `${resolution}p`;
+
+                    // Browser can't set custom Referer headers; proxy through /api/hls like we do for other providers.
+                    const proxiedVideoUrl = `/api/hls?url=${encodeURIComponent(data.videoUrl)}&referer=${encodeURIComponent(MAIN_URL)}`;
+                    collectedQualities.push({ quality: qualityLabel, url: proxiedVideoUrl });
+
+                    if (!bestVideoUrl) {
+                        bestVideoUrl = proxiedVideoUrl;
+                        bestSubtitles = (data.subtitles || []).map((s: any) => {
+                            const lang = s.abbreviate || s.title || 'Unknown';
+                            const rawUrl = s.url || '';
+                            const proxiedSubUrl = rawUrl
+                                ? `/api/hls?url=${encodeURIComponent(rawUrl)}&referer=${encodeURIComponent(MAIN_URL)}`
+                                : '';
+                            const label = s.title || lang || 'Subtitles';
+                            return { language: lang, label, url: proxiedSubUrl };
+                        }).filter((s: any) => Boolean(s.url));
+                    }
                 }
             } catch { }
         }
-        return null;
+
+        if (!bestVideoUrl) return null;
+
+        return {
+            videoUrl: bestVideoUrl,
+            subtitles: bestSubtitles,
+            qualities: collectedQualities,
+            headers: { 'Referer': MAIN_URL }
+        };
     }
 };

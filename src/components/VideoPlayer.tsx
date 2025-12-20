@@ -14,6 +14,7 @@ interface VideoPlayerProps {
     movieId: string;
     episodeId: string;
     languageId?: number | string;
+    showOpenDownload?: boolean;
 }
 
 export default function VideoPlayer({
@@ -24,7 +25,8 @@ export default function VideoPlayer({
     audioTracks = [],
     movieId,
     episodeId,
-    languageId
+    languageId,
+    showOpenDownload = true
 }: VideoPlayerProps) {
     console.log('[VideoPlayer] Received:', {
         subtitlesCount: subtitles.length,
@@ -33,6 +35,7 @@ export default function VideoPlayer({
     });
 
     const videoRef = useRef<HTMLVideoElement>(null);
+    const plyrRef = useRef<any>(null);
     const hlsRef = useRef<Hls | null>(null);
     const hlsMediaErrorCountRef = useRef(0);
     const hlsLastRecoveryAtRef = useRef(0);
@@ -54,6 +57,55 @@ export default function VideoPlayer({
     useEffect(() => {
         setIsMounted(true);
     }, []);
+
+    useEffect(() => {
+        if (!isMounted) return;
+        const video = videoRef.current;
+        if (!video) return;
+        if (plyrRef.current) return;
+
+        let cancelled = false;
+        let player: any = null;
+
+        (async () => {
+            try {
+                const mod = await import('plyr');
+                if (cancelled) return;
+                const PlyrCtor = (mod as any)?.default ?? (mod as any);
+                player = new PlyrCtor(video, {
+                    autoplay: false,
+                    controls: [
+                        'play-large',
+                        'play',
+                        'progress',
+                        'current-time',
+                        'duration',
+                        'mute',
+                        'volume',
+                        'captions',
+                        'settings',
+                        'airplay',
+                        'fullscreen'
+                    ],
+                    tooltips: { controls: true, seek: true },
+                    keyboard: { focused: false, global: false },
+                    captions: { active: false, update: true },
+                });
+
+                plyrRef.current = player;
+            } catch (e) {
+                console.error('[VideoPlayer] Plyr failed to load', e);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+            if (player) {
+                player.destroy();
+            }
+            plyrRef.current = null;
+        };
+    }, [isMounted]);
 
     useEffect(() => {
         // Reset state on new episode
@@ -109,7 +161,10 @@ export default function VideoPlayer({
 
             const hls = new Hls({
                 enableWorker: true,
-                lowLatencyMode: true,
+                // These are VOD-style streams; low-latency mode can increase buffer/codec edge cases.
+                lowLatencyMode: false,
+                // Some sources are slow on the first fragment; avoid spurious timeouts.
+                fragLoadingTimeOut: 20000,
                 xhrSetup: function (xhr, url) {
                     xhr.withCredentials = false; // Avoid CORS issues with some proxies if not needed
                 },
@@ -150,24 +205,51 @@ export default function VideoPlayer({
                     setUseInternalQuality(false);
                     setInternalQualityLevels([]);
                 }
-
-                const playPromise = video.play();
-                if (playPromise !== undefined) {
-                    playPromise.catch(() => { });
-                }
             });
 
             hls.on(Hls.Events.ERROR, (event, data) => {
-                if (data.fatal) {
+                const decodeUpstreamUrl = (maybeProxyUrl: string | undefined) => {
+                    if (!maybeProxyUrl) return null;
+                    try {
+                        const u = new URL(maybeProxyUrl, window.location.origin);
+                        const inner = u.searchParams.get('url');
+                        return inner ? decodeURIComponent(inner) : null;
+                    } catch {
+                        return null;
+                    }
+                };
+
+                const baseSnapshot = {
+                    fatal: Boolean((data as any)?.fatal),
+                    type: (data as any)?.type,
+                    details: (data as any)?.details,
+                    url: (data as any)?.url,
+                    fragUrl: (data as any)?.frag?.url,
+                    fragUpstreamUrl: decodeUpstreamUrl((data as any)?.frag?.url),
+                    error: (data as any)?.error?.message ?? String((data as any)?.error ?? ''),
+                    reason: (data as any)?.reason,
+                    responseCode: (data as any)?.response?.code,
+                    fragSn: (data as any)?.frag?.sn,
+                    level: (data as any)?.level,
+                    parent: (data as any)?.parent,
+                };
+
+                // Always print a JSON snapshot too, because DevTools sometimes renders objects as `{}`.
+                // (e.g. when properties are non-enumerable/getters or get stripped in some builds)
+                if ((data as any)?.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                    console.error('HLS Media Error', baseSnapshot);
+                    console.error('HLS Media Error JSON', JSON.stringify(baseSnapshot));
+                } else if ((data as any)?.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                    console.error('HLS Network Error', baseSnapshot);
+                    console.error('HLS Network Error JSON', JSON.stringify(baseSnapshot));
+                } else {
+                    console.error('HLS Error', baseSnapshot);
+                    console.error('HLS Error JSON', JSON.stringify(baseSnapshot));
+                }
+
+                if ((data as any)?.fatal) {
                     switch (data.type) {
                         case Hls.ErrorTypes.NETWORK_ERROR:
-                            console.error("HLS Network Error", {
-                                type: data.type,
-                                details: data.details,
-                                fatal: data.fatal,
-                                responseCode: (data as any).response?.code,
-                                url: (data as any).url,
-                            });
                             // Avoid tight retry loops
                             setTimeout(() => hls.startLoad(), 500);
                             break;
@@ -177,10 +259,7 @@ export default function VideoPlayer({
                             const now = Date.now();
                             const msSinceLast = now - hlsLastRecoveryAtRef.current;
 
-                            console.error("HLS Media Error", {
-                                type: data.type,
-                                details: data.details,
-                                fatal: data.fatal,
+                            console.error('HLS Media Error recovery', {
                                 count: hlsMediaErrorCountRef.current,
                                 msSinceLast,
                             });
@@ -197,12 +276,16 @@ export default function VideoPlayer({
                                 hls.recoverMediaError();
                             } else {
                                 hls.destroy();
-                                setError('HLS Media Error. Try switching quality or using Open / Download.');
+                                setError(showOpenDownload
+                                    ? 'HLS Media Error. Try switching quality or using Open / Download.'
+                                    : 'HLS Media Error. Try switching quality or changing audio.');
                             }
                             break;
                         default:
                             hls.destroy();
-                            setError("HLS Fatal Error. Try external player.");
+                            setError(showOpenDownload
+                                ? 'HLS Fatal Error. Try external player (Open / Download).'
+                                : 'HLS Fatal Error. This stream may be unsupported in-browser.');
                             break;
                     }
                 }
@@ -221,10 +304,6 @@ export default function VideoPlayer({
                 hlsRef.current = null;
             }
             video.src = url;
-            const playPromise = video.play();
-            if (playPromise !== undefined) {
-                playPromise.catch(() => { });
-            }
             return () => {
                 video.removeEventListener('error', onError);
             };
@@ -272,10 +351,6 @@ export default function VideoPlayer({
                 setTimeout(() => {
                     if (videoRef.current) {
                         videoRef.current.currentTime = currentTime;
-                        const playPromise = videoRef.current.play();
-                        if (playPromise !== undefined) {
-                            playPromise.catch(() => { });
-                        }
                     }
                 }, 500);
             }
@@ -294,6 +369,17 @@ export default function VideoPlayer({
     const displayQualityOptions = useInternalQuality
         ? [{ id: -1, label: 'Auto' }, ...internalQualityLevels]
         : qualities.map((q, idx) => ({ id: idx, label: q.quality }));
+
+    useEffect(() => {
+        // Default audio selection to first option when not provided
+        if (currentAudio === undefined && displayAudioTracks.length > 0) {
+            setCurrentAudio(displayAudioTracks[0].id);
+        }
+        // Default quality selection to first external option (matches our defaultSource)
+        if (!useInternalQuality && currentQuality === null && displayQualityOptions.length > 0) {
+            setCurrentQuality(displayQualityOptions[0].id);
+        }
+    }, [currentAudio, currentQuality, displayAudioTracks, displayQualityOptions, useInternalQuality]);
 
     // Add keyboard controls
     useEffect(() => {
@@ -356,25 +442,25 @@ export default function VideoPlayer({
 
     if (!isMounted) {
         return (
-            <div className="player-container" style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: '#000', minHeight: '400px' }}>
+            <div className="player-container player-shell">
                 {/* Fallback/Loading state */}
             </div>
         );
     }
 
     return (
-        <div className="player-container" style={{ position: 'relative' }}>
+        <div className="player-container player-shell">
             <video
                 ref={videoRef}
-                controls
                 crossOrigin="anonymous"
+                playsInline
                 poster={poster}
-                style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
+                className="player-video"
             >
                 {subtitles.map((sub, i) => (
                     <track
                         key={i}
-                        kind="subtitles"
+                        kind="captions"
                         src={sub.url}
                         srcLang={sub.language}
                         label={sub.title}
@@ -382,184 +468,137 @@ export default function VideoPlayer({
                 ))}
             </video>
 
-            {/* Skip Controls */}
-            <div style={{
-                position: 'absolute',
-                bottom: '60px',
-                left: '10px',
-                zIndex: 10,
-                display: 'flex',
-                gap: '8px',
-                opacity: 0.6,
-                transition: 'opacity 0.3s'
-            }}
-                onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
-                onMouseLeave={(e) => e.currentTarget.style.opacity = '0.6'}
-            >
-                <button
-                    onClick={() => skipTime(-10)}
-                    style={{
-                        background: 'rgba(0,0,0,0.8)',
-                        color: 'white',
-                        border: '1px solid #666',
-                        padding: '6px 10px',
-                        borderRadius: '6px',
-                        cursor: 'pointer',
-                        fontSize: '12px',
-                        fontWeight: 'bold',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                    }}
-                    title="Rewind 10 seconds (Left Arrow)"
-                >
-                    <span style={{ fontSize: '14px' }}>⏪</span>
-                </button>
-                <button
-                    onClick={() => skipTime(10)}
-                    style={{
-                        background: 'rgba(0,0,0,0.8)',
-                        color: 'white',
-                        border: '1px solid #666',
-                        padding: '6px 10px',
-                        borderRadius: '6px',
-                        cursor: 'pointer',
-                        fontSize: '12px',
-                        fontWeight: 'bold',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                    }}
-                    title="Forward 10 seconds (Right Arrow)"
-                >
-                    <span style={{ fontSize: '14px' }}>⏩</span>
-                </button>
-            </div>
+            {/* Top HUD (modern control bar) */}
+            <div className="player-hud">
+                <div className="player-hud-group">
+                    <div className="player-hud-panel">
+                        {showOpenDownload && (
+                            <a
+                                href={url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="player-action"
+                                title="If video fails (e.g. MKV), click to download or open directly"
+                            >
+                                Open / Download
+                            </a>
+                        )}
+                    </div>
+                </div>
 
-            {/* Overlay Controls */}
-            <div style={{
-                position: 'absolute',
-                top: '10px',
-                right: '10px',
-                zIndex: 10,
-                display: 'flex',
-                gap: '10px'
-            }}>
-                {displayAudioTracks.length >= 1 && (
-                    <select
-                        style={{
-                            background: 'rgba(0,0,0,0.7)',
-                            color: 'white',
-                            border: '1px solid #444',
-                            padding: '5px',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            maxWidth: '120px'
-                        }}
-                        onChange={(e) => {
-                            // If internal (HLS), value is number index. 
-                            // If external (API), value is string languageId.
-                            const val = e.target.value;
-                            const isNum = !isNaN(Number(val));
-                            // However, we hardcode empty string for English default?
-                            // Audio options: value={t.id}. t.id comes from audioTracks prop.
-                            // In cncverse: {languageId: '', name: 'English'}, {languageId: 'hin', ...}
-                            // So value is '' or 'hin'.
+                <div className="player-hud-group">
+                    <div className="player-hud-panel">
+                        <div className="player-overlay-controls">
+                            {displayAudioTracks.length > 1 && (
+                                <select
+                                    className="select select--overlay"
+                                    onChange={(e) => {
+                                        const val = e.target.value;
+                                        if (useInternalAudio) {
+                                            changeStream(undefined, Number(val));
+                                        } else {
+                                            changeStream(undefined, val);
+                                        }
+                                    }}
+                                    disabled={isLoading}
+                                    value={currentAudio ?? ""}
+                                    aria-label="Audio"
+                                >
+                                    {displayAudioTracks.map(t => (
+                                        <option key={t.id} value={t.id}>
+                                            {t.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            )}
 
-                            // If useInternalAudio is true, id is index (number).
-                            if (useInternalAudio) {
-                                changeStream(undefined, Number(val));
-                            } else {
-                                // External
-                                changeStream(undefined, val);
-                            }
-                        }}
-                        disabled={isLoading}
-                        value={currentAudio ?? ""}
-                    >
-                        {displayAudioTracks.map(t => (
-                            <option key={t.id} value={t.id}>
-                                {t.name}
-                            </option>
-                        ))}
-                    </select>
-                )}
+                            {displayQualityOptions.length > 0 && (
+                                <select
+                                    className="select select--overlay"
+                                    onChange={(e) => changeStream(Number(e.target.value), undefined)}
+                                    disabled={isLoading}
+                                    value={currentQuality !== null ? currentQuality : ""}
+                                    aria-label="Quality"
+                                >
+                                    <option value="" disabled>
+                                        Quality
+                                    </option>
+                                    {displayQualityOptions.map((q) => (
+                                        <option key={`${q.id}-${q.label}`} value={q.id}>
+                                            {q.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            )}
 
-                {displayQualityOptions.length > 0 && (
-                    <select
-                        style={{
-                            background: 'rgba(0,0,0,0.7)',
-                            color: 'white',
-                            border: '1px solid #444',
-                            padding: '5px',
-                            borderRadius: '4px',
-                            cursor: 'pointer'
-                        }}
-                        onChange={(e) => changeStream(Number(e.target.value), undefined)}
-                        disabled={isLoading}
-                        value={currentQuality !== null ? currentQuality : ""}
-                    >
-                        <option value="" disabled>Quality</option>
-                        {displayQualityOptions.map((q) => (
-                            <option key={`${q.id}-${q.label}`} value={q.id}>
-                                {q.label}
-                            </option>
-                        ))}
-                    </select>
-                )}
+                            {subtitles.length > 0 && (
+                                <select
+                                    className="select select--overlay"
+                                    onChange={(e) => {
+                                        const video = videoRef.current;
+                                        if (!video) return;
 
-                {subtitles.length > 0 && (
-                    <select
-                        style={{
-                            background: 'rgba(0,0,0,0.7)',
-                            color: 'white',
-                            border: '1px solid #444',
-                            padding: '5px',
-                            borderRadius: '4px',
-                            cursor: 'pointer'
-                        }}
-                        onChange={(e) => {
-                            const video = videoRef.current;
-                            if (!video) return;
+                                        const plyrAny = plyrRef.current as any;
 
-                            // Disable all text tracks first
-                            for (let i = 0; i < video.textTracks.length; i++) {
-                                video.textTracks[i].mode = 'disabled';
-                            }
+                                        for (let i = 0; i < video.textTracks.length; i++) {
+                                            video.textTracks[i].mode = 'disabled';
+                                        }
 
-                            // Enable selected track
-                            const idx = Number(e.target.value);
-                            if (idx >= 0 && video.textTracks[idx]) {
-                                video.textTracks[idx].mode = 'showing';
-                            }
-                        }}
-                    >
-                        <option value="-1">Subtitles: Off</option>
-                        {subtitles.map((sub, idx) => (
-                            <option key={idx} value={idx}>
-                                {sub.title}
-                            </option>
-                        ))}
-                    </select>
-                )}
+                                        const idx = Number(e.target.value);
+                                        if (idx >= 0 && subtitles[idx]) {
+                                            const target = subtitles[idx];
+
+                                            // Track order can differ from DOM order; try to match by label/language.
+                                            let matchIndex = -1;
+                                            for (let i = 0; i < video.textTracks.length; i++) {
+                                                const tt = video.textTracks[i];
+                                                if (tt.label && tt.label === target.title) {
+                                                    matchIndex = i;
+                                                    break;
+                                                }
+                                                if (tt.language && target.language && tt.language === target.language) {
+                                                    matchIndex = i;
+                                                }
+                                            }
+
+                                            // Fallback: assume DOM track order matches subtitles[] order.
+                                            if (matchIndex < 0 && idx < video.textTracks.length) {
+                                                matchIndex = idx;
+                                            }
+
+                                            if (matchIndex >= 0 && video.textTracks[matchIndex]) {
+                                                video.textTracks[matchIndex].mode = 'showing';
+                                                // Plyr manages captions internally; ensure we update its selected track.
+                                                try { plyrAny.currentTrack = matchIndex; } catch { }
+                                                try { plyrAny?.toggleCaptions?.(true); } catch { }
+                                            } else {
+                                                try { plyrAny.currentTrack = -1; } catch { }
+                                                try { plyrAny?.toggleCaptions?.(false); } catch { }
+                                            }
+                                        } else {
+                                            try { plyrAny.currentTrack = -1; } catch { }
+                                            try { plyrAny?.toggleCaptions?.(false); } catch { }
+                                        }
+                                    }}
+                                    aria-label="Subtitles"
+                                >
+                                    <option value="-1">Subtitles: Off</option>
+                                    {subtitles.map((sub, idx) => (
+                                        <option key={idx} value={idx}>
+                                            {sub.title}
+                                        </option>
+                                    ))}
+                                </select>
+                            )}
+                        </div>
+                    </div>
+                </div>
             </div>
 
             {error && (
-                <div style={{
-                    position: 'absolute',
-                    top: '50%',
-                    left: '50%',
-                    transform: 'translate(-50%, -50%)',
-                    color: '#ff6b6b',
-                    background: 'rgba(0,0,0,0.8)',
-                    padding: '20px',
-                    borderRadius: '8px',
-                    textAlign: 'center',
-                    maxWidth: '80%',
-                    zIndex: 20
-                }}>
-                    <p style={{ margin: '0 0 10px 0', fontSize: '16px', fontWeight: 'bold' }}>{error}</p>
-                    <p style={{ margin: '0', fontSize: '14px', color: '#ccc' }}>
+                <div className="player-center-badge">
+                    <p className="title">{error}</p>
+                    <p className="hint">
                         The browser cannot play this video. <br />
                         Please use the <b>Open / Download</b> button in the top-left to play it externally (e.g. VLC).
                     </p>
@@ -567,45 +606,11 @@ export default function VideoPlayer({
             )}
 
             {isLoading && (
-                <div style={{
-                    position: 'absolute',
-                    top: '50%',
-                    left: '50%',
-                    transform: 'translate(-50%, -50%)',
-                    color: 'white',
-                    background: 'rgba(0,0,0,0.6)',
-                    padding: '10px',
-                    borderRadius: '5px'
-                }}>
+                <div className="player-center-badge">
                     Switching...
                 </div>
             )}
 
-            {/* External Player / Download Link */}
-            <div style={{
-                position: 'absolute',
-                top: '10px',
-                left: '10px',
-                zIndex: 10
-            }}>
-                <a
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{
-                        background: 'rgba(0,0,0,0.6)',
-                        color: '#fff',
-                        textDecoration: 'none',
-                        padding: '5px 10px',
-                        borderRadius: '4px',
-                        fontSize: '12px',
-                        border: '1px solid #444'
-                    }}
-                    title="If video fails (e.g. MKV), click to download or open directly"
-                >
-                    Open / Download
-                </a>
-            </div>
         </div>
     );
 }

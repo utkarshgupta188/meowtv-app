@@ -72,6 +72,7 @@ export async function GET(request: NextRequest) {
     const referer = request.nextUrl.searchParams.get('referer') || 'https://net51.cc/';
     const cookie = request.nextUrl.searchParams.get('cookie') || 'hd=on';
     const decryptParam = request.nextUrl.searchParams.get('decrypt'); // 'kartoons'
+    const rangeHeader = request.headers.get('range');
 
     console.log('[HLS Proxy] === NEW REQUEST ===');
     console.log('[HLS Proxy] URL:', url);
@@ -89,6 +90,11 @@ export async function GET(request: NextRequest) {
             'Cookie': cookie
         };
 
+        // Preserve byte-range requests from Hls.js (common for fMP4/byte-range streams).
+        if (rangeHeader) {
+            (headers as any)['Range'] = rangeHeader;
+        }
+
         const response = await fetch(url, { headers });
 
         if (!response.ok) {
@@ -98,6 +104,24 @@ export async function GET(request: NextRequest) {
 
         const contentType = response.headers.get('content-type') || '';
         const contentLength = Number(response.headers.get('content-length') || '0') || 0;
+
+        // Helpful diagnostics: some sources return HTML/JSON for segment URLs (403 pages, redirects, etc.)
+        // which then surface in the player as "Failed to find demuxer".
+        const looksLikeTextual = /text\//i.test(contentType) || /json|html|xml/i.test(contentType);
+        if (decryptParam && looksLikeTextual) {
+            try {
+                const sampleText = await response.clone().text();
+                console.warn('[HLS Proxy] Textual upstream response', {
+                    url,
+                    status: response.status,
+                    contentType,
+                    contentLength,
+                    sample: sampleText.slice(0, 300)
+                });
+            } catch {
+                // ignore
+            }
+        }
 
         const looksLikePlaylistByUrl = url.toLowerCase().includes('.m3u8');
         const looksLikePlaylistByType = /mpegurl|m3u8/i.test(contentType);
@@ -120,14 +144,22 @@ export async function GET(request: NextRequest) {
         if (playlistText !== null) {
             let text = playlistText;
 
-            const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
             const proxySuffix = `&referer=${encodeURIComponent(referer)}&cookie=${encodeURIComponent(cookie)}${decryptParam ? `&decrypt=${decryptParam}` : ''}`;
 
-            const toAbsolute = (maybeRelative: string) => {
+            const resolveUrl = (maybeRelative: string) => {
+                const ref = maybeRelative.trim();
                 // Already-local proxied URL; keep as-is (prevents proxy recursion)
-                if (maybeRelative.startsWith('/api/hls?') || maybeRelative.startsWith('/api/proxy?')) return maybeRelative;
-                if (maybeRelative.startsWith('http')) return maybeRelative;
-                return baseUrl + maybeRelative;
+                if (ref.startsWith('/api/hls?') || ref.startsWith('/api/proxy?')) return ref;
+
+                // Absolute URL
+                if (/^https?:\/\//i.test(ref)) return ref;
+
+                // Resolve relative, root-relative (/foo), ../foo, and query-only (?a=b) correctly
+                try {
+                    return new URL(ref, url).toString();
+                } catch {
+                    return ref;
+                }
             };
 
             const decryptIfNeeded = (value: string) => {
@@ -135,7 +167,8 @@ export async function GET(request: NextRequest) {
                 // Most often the value is exactly "enc2:...".
                 if (value.startsWith('enc2:')) {
                     const decrypted = decryptStream(value);
-                    return decrypted ?? value;
+                    // Defensive: decrypted strings should be single-line URLs
+                    return (decrypted ?? value).split(/\r?\n/)[0].trim();
                 }
 
                 // Defensive: if a tag contains an enc2 token inside a larger string, decrypt tokens in-place.
@@ -158,7 +191,7 @@ export async function GET(request: NextRequest) {
                     // If already proxied, leave it.
                     if (uri.startsWith('/api/hls?')) return `${keyName}="${uri}"`;
                     let absoluteUrl = decryptIfNeeded(uri);
-                    absoluteUrl = toAbsolute(absoluteUrl);
+                    absoluteUrl = resolveUrl(absoluteUrl);
                     return `${keyName}="${wrapProxy(absoluteUrl)}"`;
                 });
 
@@ -168,7 +201,7 @@ export async function GET(request: NextRequest) {
                     // If it was already handled by quoted pass or already proxied, skip.
                     if (uri.startsWith('"') || uri.startsWith('/api/hls?')) return `${keyName}=${uri}`;
                     let absoluteUrl = decryptIfNeeded(uri);
-                    absoluteUrl = toAbsolute(absoluteUrl);
+                    absoluteUrl = resolveUrl(absoluteUrl);
                     return `${keyName}=${wrapProxy(absoluteUrl)}`;
                 });
 
@@ -190,7 +223,7 @@ export async function GET(request: NextRequest) {
                 if (trimmed.startsWith('/api/hls?') || trimmed.startsWith('/api/proxy?')) return trimmed;
 
                 let absoluteUrl = decryptIfNeeded(trimmed);
-                absoluteUrl = toAbsolute(absoluteUrl);
+                absoluteUrl = resolveUrl(absoluteUrl);
                 return wrapProxy(absoluteUrl);
             }).join('\n');
 
@@ -225,12 +258,24 @@ export async function GET(request: NextRequest) {
         // For other resources (segments, images), just proxy them
         const data = await response.arrayBuffer();
 
+        const contentRange = response.headers.get('content-range') || '';
+        const acceptRanges = response.headers.get('accept-ranges') || '';
+        const upstreamLength = response.headers.get('content-length') || '';
+
+        const outHeaders: Record<string, string> = {
+            'Content-Type': contentType,
+            'Access-Control-Allow-Origin': '*',
+            // Byte-range responses should not be cached aggressively.
+            'Cache-Control': rangeHeader ? 'no-cache' : 'public, max-age=3600'
+        };
+
+        if (contentRange) outHeaders['Content-Range'] = contentRange;
+        if (acceptRanges) outHeaders['Accept-Ranges'] = acceptRanges;
+        if (upstreamLength) outHeaders['Content-Length'] = upstreamLength;
+
         return new NextResponse(data, {
-            headers: {
-                'Content-Type': contentType,
-                'Access-Control-Allow-Origin': '*',
-                'Cache-Control': 'public, max-age=3600'
-            }
+            status: response.status,
+            headers: outHeaders
         });
     } catch (error) {
         console.error('HLS Proxy error:', error);

@@ -5,7 +5,7 @@ import { setProviderAction, getProviderNameAction } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 
 export default function ProviderSwitcher() {
-    const [provider, setProvider] = useState<string>('MeowMov');
+    const [provider, setProvider] = useState<string>('MeowTV');
     const router = useRouter();
 
     useEffect(() => {
@@ -21,25 +21,16 @@ export default function ProviderSwitcher() {
     };
 
     return (
-        <div style={{ marginRight: '20px' }}>
-            <select
-                suppressHydrationWarning
-                value={provider}
-                onChange={handleChange}
-                style={{
-                    background: '#333',
-                    color: 'white',
-                    padding: '5px 10px',
-                    borderRadius: '4px',
-                    border: '1px solid #555',
-                    outline: 'none',
-                    cursor: 'pointer'
-                }}
-            >
-                <option value="MeowMov">MeowMov</option>
-                <option value="MeowVerse">MeowVerse</option>
-                <option value="MeowToon">MeowToon</option>
-            </select>
-        </div>
+        <select
+            suppressHydrationWarning
+            value={provider}
+            onChange={handleChange}
+            className="select"
+            aria-label="Provider"
+        >
+            <option value="MeowTV">MeowTV</option>
+            <option value="MeowVerse">MeowVerse</option>
+            <option value="MeowToon">MeowToon</option>
+        </select>
     );
 }

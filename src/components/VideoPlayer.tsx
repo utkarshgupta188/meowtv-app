@@ -35,7 +35,6 @@ export default function VideoPlayer({
     });
 
     const videoRef = useRef<HTMLVideoElement>(null);
-    const containerRef = useRef<HTMLDivElement>(null);
     const plyrRef = useRef<any>(null);
     const hlsRef = useRef<Hls | null>(null);
     const hlsMediaErrorCountRef = useRef(0);
@@ -164,21 +163,9 @@ export default function VideoPlayer({
                 enableWorker: true,
                 // These are VOD-style streams; low-latency mode can increase buffer/codec edge cases.
                 lowLatencyMode: false,
-                // Proxied/decrypted sources can be slow, but 60s stalls feel terrible.
-                // Use a moderate timeout + retries instead.
-                fragLoadingTimeOut: 30000,
-                manifestLoadingTimeOut: 30000,
-                levelLoadingTimeOut: 30000,
-                // Retry transient network stalls/timeouts more patiently.
-                fragLoadingMaxRetry: 6,
-                fragLoadingRetryDelay: 1000,
-                fragLoadingMaxRetryTimeout: 8000,
-                levelLoadingMaxRetry: 6,
-                levelLoadingRetryDelay: 1000,
-                levelLoadingMaxRetryTimeout: 8000,
-                manifestLoadingMaxRetry: 3,
-                manifestLoadingRetryDelay: 1000,
-                xhrSetup: function (xhr) {
+                // Some sources are slow on the first fragment; avoid spurious timeouts.
+                fragLoadingTimeOut: 20000,
+                xhrSetup: function (xhr, url) {
                     xhr.withCredentials = false; // Avoid CORS issues with some proxies if not needed
                 },
             });
@@ -249,14 +236,7 @@ export default function VideoPlayer({
 
                 // Always print a JSON snapshot too, because DevTools sometimes renders objects as `{}`.
                 // (e.g. when properties are non-enumerable/getters or get stripped in some builds)
-                const isFragTimeout =
-                    (data as any)?.type === Hls.ErrorTypes.NETWORK_ERROR &&
-                    (data as any)?.details === Hls.ErrorDetails.FRAG_LOAD_TIMEOUT;
-
-                if (isFragTimeout && !(data as any)?.fatal) {
-                    // This is common with slow proxy/decrypt hops; avoid spamming console as an "error".
-                    console.warn('HLS Fragment Timeout', baseSnapshot);
-                } else if ((data as any)?.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                if ((data as any)?.type === Hls.ErrorTypes.MEDIA_ERROR) {
                     console.error('HLS Media Error', baseSnapshot);
                     console.error('HLS Media Error JSON', JSON.stringify(baseSnapshot));
                 } else if ((data as any)?.type === Hls.ErrorTypes.NETWORK_ERROR) {
@@ -401,37 +381,6 @@ export default function VideoPlayer({
         }
     }, [currentAudio, currentQuality, displayAudioTracks, displayQualityOptions, useInternalQuality]);
 
-    const toggleFullscreen = async () => {
-        const plyr = plyrRef.current;
-        // Prefer Plyr's fullscreen handling so its controls remain visible.
-        if (plyr?.fullscreen?.enabled) {
-            plyr.fullscreen.toggle();
-            return;
-        }
-
-        if (document.fullscreenElement) {
-            await document.exitFullscreen();
-            return;
-        }
-
-        const container = containerRef.current;
-        if (container?.requestFullscreen) {
-            await container.requestFullscreen();
-            return;
-        }
-
-        const video = videoRef.current as any;
-        if (video?.requestFullscreen) {
-            await video.requestFullscreen();
-            return;
-        }
-
-        // iOS Safari fallback
-        if (video?.webkitEnterFullscreen) {
-            video.webkitEnterFullscreen();
-        }
-    };
-
     // Add keyboard controls
     useEffect(() => {
         const handleKeyPress = (e: KeyboardEvent) => {
@@ -471,7 +420,11 @@ export default function VideoPlayer({
                 case 'f':
                 case 'F':
                     e.preventDefault();
-                    void toggleFullscreen();
+                    if (document.fullscreenElement) {
+                        document.exitFullscreen();
+                    } else {
+                        video.requestFullscreen();
+                    }
                     break;
             }
         };
@@ -489,14 +442,14 @@ export default function VideoPlayer({
 
     if (!isMounted) {
         return (
-            <div className="player-container player-shell" ref={containerRef}>
+            <div className="player-container player-shell">
                 {/* Fallback/Loading state */}
             </div>
         );
     }
 
     return (
-        <div className="player-container player-shell" ref={containerRef}>
+        <div className="player-container player-shell">
             <video
                 ref={videoRef}
                 crossOrigin="anonymous"

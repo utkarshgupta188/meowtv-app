@@ -118,6 +118,17 @@ export default function VideoPlayer({
         setUseInternalAudio(false);
         setInternalQualityLevels([]);
         setUseInternalQuality(false);
+
+        // Hard reset video element + HLS to avoid stale buffers when switching episodes
+        const video = videoRef.current;
+        if (video) {
+            if (hlsRef.current) {
+                hlsRef.current.destroy();
+                hlsRef.current = null;
+            }
+            video.removeAttribute('src');
+            try { video.load(); } catch { /* ignore */ }
+        }
     }, [initialUrl, languageId]);
 
     useEffect(() => {

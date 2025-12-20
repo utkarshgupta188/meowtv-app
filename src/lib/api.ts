@@ -4,6 +4,7 @@ import { cookies } from 'next/headers';
 
 import { MeowVerseProvider } from './providers/meowverse';
 import { Provider, HomePageRow, ContentItem, MovieDetails, VideoResponse } from './providers/types';
+import { decryptStream } from './enc2';
 
 import { MeowTvProvider } from './providers/meowtv';
 import { MeowToonProvider } from './providers/meowtoon';
@@ -46,7 +47,41 @@ export async function fetchStreamUrl(
     languageId?: number | string
 ): Promise<VideoResponse | null> {
     const provider = await getProvider();
-    return provider.fetchStreamUrl(movieId, episodeId, languageId);
+    const videoData = await provider.fetchStreamUrl(movieId, episodeId, languageId);
+
+    // If any provider returns an enc2: URL directly, decrypt it here and keep routing through /api/hls.
+    if (videoData?.videoUrl?.startsWith('enc2:')) {
+        console.log('[enc2] videoUrl from provider contains enc2, decrypting...', {
+            movieId,
+            episodeId,
+            provider: (provider as any)?.name,
+        });
+        const decrypted = decryptStream(videoData.videoUrl);
+        if (decrypted) {
+            videoData.videoUrl = `/api/hls?url=${encodeURIComponent(decrypted)}&kind=playlist&decrypt=kartoons`;
+            console.log('[enc2] videoUrl decrypted to', decrypted);
+        }
+    }
+
+    // Also clean up qualities if they contain enc2: URLs
+    if (videoData?.qualities?.length) {
+        videoData.qualities = videoData.qualities.map(q => {
+            if (q.url.startsWith('enc2:')) {
+                console.log('[enc2] quality url contains enc2, decrypting...', {
+                    movieId,
+                    episodeId,
+                    provider: (provider as any)?.name,
+                });
+                const dec = decryptStream(q.url);
+                return dec
+                    ? { ...q, url: `/api/hls?url=${encodeURIComponent(dec)}&kind=playlist&decrypt=kartoons` }
+                    : q;
+            }
+            return q;
+        });
+    }
+
+    return videoData;
 }
 
 // Helper to switch provider (Server Action)

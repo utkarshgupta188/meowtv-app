@@ -1,54 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
-
-// Kartoons Decryption Helpers
-const STREAM_SECRET = Buffer.from("cG1TMENBTUcxUnVxNDlXYk15aEUzZmgxc091TFlFTDlydEZhellZbGpWSTJqNEJQU29nNzNoVzdBN3hNaGNlSEQwaXdyUHJWVkRYTHZ4eVdy", "base64").toString('utf-8');
-
-function deriveKeySha256() {
-    return crypto.createHash('sha256').update(STREAM_SECRET).digest();
-}
-
-function base64UrlToBytes(b64url: string): Buffer {
-    let s = b64url.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
-    const pad = s.length % 4;
-    if (pad !== 0) {
-        s += "=".repeat(4 - pad);
-    }
-    return Buffer.from(s, 'base64');
-}
-
-function decryptStream(value: string | null): string | null {
-    if (!value || !value.startsWith("enc2:")) return value;
-
-    try {
-        const rawB64url = value.substring(5).replace(/\s+/g, ''); // remove "enc2:" + strip whitespace
-        const blob = base64UrlToBytes(rawB64url);
-
-        if (blob.length <= 12) return null;
-
-        const iv = blob.subarray(0, 12);
-        const ctAndTag = blob.subarray(12);
-
-        // In Node crypto, auth tag is separate. 
-        // Java GCMParameterSpec(128, iv) means 128-bit (16 byte) tag is used.
-        // Usually appended at end in Java CipherOutputStream or similar.
-        const authTagLength = 16;
-        const ciphertext = ctAndTag.subarray(0, ctAndTag.length - authTagLength);
-        const authTag = ctAndTag.subarray(ctAndTag.length - authTagLength);
-
-        const key = deriveKeySha256();
-        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-        decipher.setAuthTag(authTag);
-
-        let decrypted = decipher.update(ciphertext);
-        decrypted = Buffer.concat([decrypted, decipher.final()]);
-
-        return decrypted.toString('utf-8');
-    } catch (e) {
-        console.error("Decryption failed:", e);
-        return null;
-    }
-}
+import { decryptInline, decryptStream } from '@/lib/enc2';
 
 function looksLikePlaylistText(text: string): boolean {
     return /^#EXTM3U\b/m.test(text);
@@ -169,18 +120,7 @@ export async function GET(request: NextRequest) {
                 }
             };
 
-            const decryptIfNeeded = (value: string) => {
-                if (!value.includes('enc2:')) return value;
-                // Most often the value is exactly "enc2:...".
-                if (value.startsWith('enc2:')) {
-                    const decrypted = decryptStream(value);
-                    // Defensive: decrypted strings should be single-line URLs
-                    return (decrypted ?? value).split(/\r?\n/)[0].trim();
-                }
-
-                // Defensive: if a tag contains an enc2 token inside a larger string, decrypt tokens in-place.
-                return value.replace(/enc2:[A-Za-z0-9_-]+/g, (token) => decryptStream(token) ?? token);
-            };
+            const decryptIfNeeded = (value: string) => decryptInline(value);
 
             const inferKind = (absoluteUrl: string) => {
                 const lower = absoluteUrl.toLowerCase();

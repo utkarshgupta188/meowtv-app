@@ -420,7 +420,15 @@ export default function VideoPlayer({
                 case 'f':
                 case 'F':
                     e.preventDefault();
-                    if (document.fullscreenElement) {
+                    // Use Plyr's fullscreen API so the custom controls stay visible in fullscreen.
+                    const plyr = plyrRef.current as any;
+                    if (plyr?.fullscreen) {
+                        if (plyr.fullscreen.active) {
+                            plyr.fullscreen.exit();
+                        } else {
+                            plyr.fullscreen.enter();
+                        }
+                    } else if (document.fullscreenElement) {
                         document.exitFullscreen();
                     } else {
                         video.requestFullscreen();

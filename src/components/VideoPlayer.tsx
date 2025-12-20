@@ -164,9 +164,20 @@ export default function VideoPlayer({
                 enableWorker: true,
                 // These are VOD-style streams; low-latency mode can increase buffer/codec edge cases.
                 lowLatencyMode: false,
-                // Some sources are slow on the first fragment; avoid spurious timeouts.
-                fragLoadingTimeOut: 20000,
-                xhrSetup: function (xhr, url) {
+                // Many proxied/decrypted sources are slow per-fragment; 20s is too aggressive.
+                fragLoadingTimeOut: 60000,
+                manifestLoadingTimeOut: 60000,
+                levelLoadingTimeOut: 60000,
+                // Retry transient network stalls/timeouts more patiently.
+                fragLoadingMaxRetry: 6,
+                fragLoadingRetryDelay: 1000,
+                fragLoadingMaxRetryTimeout: 8000,
+                levelLoadingMaxRetry: 6,
+                levelLoadingRetryDelay: 1000,
+                levelLoadingMaxRetryTimeout: 8000,
+                manifestLoadingMaxRetry: 3,
+                manifestLoadingRetryDelay: 1000,
+                xhrSetup: function (xhr) {
                     xhr.withCredentials = false; // Avoid CORS issues with some proxies if not needed
                 },
             });
@@ -237,7 +248,14 @@ export default function VideoPlayer({
 
                 // Always print a JSON snapshot too, because DevTools sometimes renders objects as `{}`.
                 // (e.g. when properties are non-enumerable/getters or get stripped in some builds)
-                if ((data as any)?.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                const isFragTimeout =
+                    (data as any)?.type === Hls.ErrorTypes.NETWORK_ERROR &&
+                    (data as any)?.details === Hls.ErrorDetails.FRAG_LOAD_TIMEOUT;
+
+                if (isFragTimeout && !(data as any)?.fatal) {
+                    // This is common with slow proxy/decrypt hops; avoid spamming console as an "error".
+                    console.warn('HLS Fragment Timeout', baseSnapshot);
+                } else if ((data as any)?.type === Hls.ErrorTypes.MEDIA_ERROR) {
                     console.error('HLS Media Error', baseSnapshot);
                     console.error('HLS Media Error JSON', JSON.stringify(baseSnapshot));
                 } else if ((data as any)?.type === Hls.ErrorTypes.NETWORK_ERROR) {

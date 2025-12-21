@@ -1,61 +1,10 @@
 import { Provider, HomePageRow, ContentItem, MovieDetails, Episode, Season, VideoResponse } from './types';
-import crypto from 'crypto';
 
 // Built from the Android provider in `Kartoons/`.
 const MAIN_URL = 'https://api.kartoons.fun';
-const SECRET_KEY_B64 = 'YmNhOWUwZGYxYTVhYmIzMjkwNmNhM2Y2M2FjMDRjZWY=';
+const DECRYPT_BASE = 'https://kartoondecrypt.onrender.com';
 
 type KartoonsListResponse<T> = { data?: T };
-
-function base64UrlToBytes(b64url: string): Buffer {
-    let s = b64url.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
-    const pad = s.length % 4;
-    if (pad !== 0) s += '='.repeat(4 - pad);
-    return Buffer.from(s, 'base64');
-}
-
-function deriveKeyBytes(secret: string): Buffer {
-    const fixed = secret.padEnd(32, ' ').substring(0, 32);
-    return Buffer.from(fixed, 'utf8');
-}
-
-function stripPkcs7Padding(data: Buffer): Buffer {
-    if (data.length === 0) return data;
-    const padValue = data[data.length - 1];
-    if (!padValue || padValue < 1 || padValue > 16) return data;
-    for (let i = 0; i < padValue; i++) {
-        if (data[data.length - 1 - i] !== padValue) return data;
-    }
-    return data.subarray(0, data.length - padValue);
-}
-
-// encryptedDataBase64Url = base64url( IV(16 bytes) || CIPHERTEXT )
-// secretKeyString = base64Decode(SECRET_KEY_B64) then padEnd(32, " ") in UTF-8
-function decryptAesCbcBase64Url(encryptedDataBase64Url: string): string {
-    const secretKeyString = Buffer.from(SECRET_KEY_B64, 'base64').toString('utf8');
-    if (!encryptedDataBase64Url || !secretKeyString) {
-        throw new Error('encrypted data and secret key must be provided');
-    }
-
-    const keyBytes = deriveKeyBytes(secretKeyString);
-    if (keyBytes.length !== 32) {
-        throw new Error(`Key length ${keyBytes.length} != 32 bytes`);
-    }
-
-    const encryptedBytes = base64UrlToBytes(encryptedDataBase64Url);
-    if (encryptedBytes.length <= 16) {
-        throw new Error('Ciphertext too short: missing IV or data');
-    }
-
-    const iv = encryptedBytes.subarray(0, 16);
-    const ciphertext = encryptedBytes.subarray(16);
-
-    const decipher = crypto.createDecipheriv('aes-256-cbc', keyBytes, iv);
-    decipher.setAutoPadding(false);
-
-    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-    return stripPkcs7Padding(decrypted).toString('utf8');
-}
 
 function normalizeKartoonsId(id: any): string | null {
     if (id == null) return null;
@@ -63,13 +12,31 @@ function normalizeKartoonsId(id: any): string | null {
     return s.length ? s : null;
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
-    const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        throw new Error(`HTTP ${res.status} for ${url}${body ? `: ${body.slice(0, 200)}` : ''}`);
+function isAbortError(err: any): boolean {
+    const name = err?.name;
+    const code = err?.code;
+    return name === 'AbortError' || code === 20;
+}
+
+async function fetchJson<T>(url: string, timeoutMs: number = 4_000): Promise<T> {
+    // Fast-fail so SSR doesn't hang on blocked networks.
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { cache: 'no-store', signal: controller.signal });
+        if (!res.ok) {
+            const body = await res.text().catch(() => '');
+            throw new Error(`HTTP ${res.status} for ${url}${body ? `: ${body.slice(0, 200)}` : ''}`);
+        }
+        return res.json() as Promise<T>;
+    } finally {
+        clearTimeout(t);
     }
-    return res.json() as Promise<T>;
+}
+
+function toLocalKartoonsStreamUrl(encodedLink: string): string {
+    const clean = String(encodedLink || '').replace(/\s+/g, '');
+    return `${DECRYPT_BASE}/kartoons?data=${encodeURIComponent(clean)}`;
 }
 
 function parseContentId(raw: string): { type: 'movie' | 'series'; identifier: string } | null {
@@ -113,6 +80,7 @@ export const MeowToonProvider: Provider = {
                 { name: 'Movies', contents: (moviesData.data || []).map((i: any) => mapToItem(i, 'movie')) }
             ].filter(r => r.contents.length > 0);
         } catch (e) {
+            if (isAbortError(e)) return [];
             console.error('[MeowToon] fetchHome failed:', e);
             return [];
         }
@@ -136,6 +104,7 @@ export const MeowToonProvider: Provider = {
                 };
             });
         } catch (e) {
+            if (isAbortError(e)) return [];
             console.error('[MeowToon] search failed:', e);
             return [];
         }
@@ -197,7 +166,9 @@ export const MeowToonProvider: Provider = {
                                 })
                                 .filter(Boolean) as Episode[];
                         } catch (err) {
-                            console.error('[MeowToon] Failed to fetch season episodes:', sUrl, err);
+                            if (!isAbortError(err)) {
+                                console.error('[MeowToon] Failed to fetch season episodes:', sUrl, err);
+                            }
                             return [] as Episode[];
                         }
                     })
@@ -246,6 +217,7 @@ export const MeowToonProvider: Provider = {
                 tags: Array.isArray(data.tags) ? data.tags : undefined
             };
         } catch (e) {
+            if (isAbortError(e)) return null;
             console.error('[MeowToon] fetchDetails failed:', e);
             return null;
         }
@@ -263,7 +235,24 @@ export const MeowToonProvider: Provider = {
                 return null;
             }
 
-            const json = await fetchJson<any>(url);
+            let json: any;
+            try {
+                json = await fetchJson<any>(url, 4_000);
+            } catch (e) {
+                if (isAbortError(e)) {
+                    // Retry once with a slightly longer timeout before giving up
+                    try {
+                        json = await fetchJson<any>(url, 8_000);
+                    } catch (retryErr) {
+                        if (isAbortError(retryErr)) return null;
+                        console.error('[MeowToon] fetchStreamUrl retry failed:', retryErr);
+                        return null;
+                    }
+                } else {
+                    console.error('[MeowToon] fetchStreamUrl failed:', e);
+                    return null;
+                }
+            }
             const links = json?.data?.links;
             if (!Array.isArray(links) || links.length === 0) return null;
 
@@ -271,25 +260,16 @@ export const MeowToonProvider: Provider = {
                 const encoded = link?.url;
                 if (!encoded) continue;
 
-                try {
-                    const m3u8Url = decryptAesCbcBase64Url(String(encoded));
-                    if (!m3u8Url || !m3u8Url.startsWith('http')) continue;
-
-                    // Route through our HLS proxy so `enc2:` lines get decrypted server-side.
-                    const proxied = `/api/hls?url=${encodeURIComponent(m3u8Url)}&kind=playlist&referer=${encodeURIComponent(m3u8Url)}&decrypt=kartoons`;
-                    return {
-                        videoUrl: proxied,
-                        headers: {},
-                        qualities: []
-                    };
-                } catch (err) {
-                    // try next link
-                    console.error('[MeowToon] Decrypt failed for link:', err);
-                }
+                return {
+                    // Single-step stream URL: Python decrypts the Kartoons blob AND returns the final playlist.
+                    videoUrl: toLocalKartoonsStreamUrl(String(encoded)),
+                    headers: {},
+                    qualities: []
+                };
             }
             return null;
         } catch (e) {
-            console.error('[MeowToon] fetchStreamUrl failed:', e);
+            if (!isAbortError(e)) console.error('[MeowToon] fetchStreamUrl failed:', e);
             return null;
         }
     }

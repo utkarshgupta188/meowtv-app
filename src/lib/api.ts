@@ -7,12 +7,13 @@ import { Provider, HomePageRow, ContentItem, MovieDetails, VideoResponse } from 
 
 import { MeowTvProvider } from './providers/meowtv';
 import { MeowToonProvider } from './providers/meowtoon';
+import { fetchDetails as fetchXonDetails, fetchStream as fetchXonStream } from './xon';
 
 // Registry
 const PROVIDERS: Record<string, Provider> = {
     'MeowTV': MeowTvProvider,
     'MeowVerse': MeowVerseProvider,
-    'MeowToon': MeowToonProvider
+    'MeowToon': MeowToonProvider,
 };
 
 const DEFAULT_PROVIDER = 'MeowTV';
@@ -59,6 +60,13 @@ async function getProviderWithName(): Promise<{ providerName: string; provider: 
     return { providerName, provider: PROVIDERS[providerName] || PROVIDERS[DEFAULT_PROVIDER] };
 }
 
+function resolveProviderForId(id: string, fallbackName: string): { providerName: string; provider: Provider } {
+    if (id.startsWith('xon:')) {
+        return { providerName: 'MeowToon', provider: PROVIDERS['MeowToon'] };
+    }
+    return { providerName: fallbackName, provider: PROVIDERS[fallbackName] || PROVIDERS[DEFAULT_PROVIDER] };
+}
+
 // Global Exported Functions (Facade)
 
 export async function fetchHome(page: number = 1): Promise<HomePageRow[]> {
@@ -71,8 +79,63 @@ export async function searchContent(query: string): Promise<ContentItem[]> {
     return provider.search(query);
 }
 
+// Details: try direct Xon first (cached), then provider-based resolution
 export async function fetchDetails(id: string): Promise<MovieDetails | null> {
-    const { providerName, provider } = await getProviderWithName();
+    if (id.startsWith('xon:')) {
+        const cacheKey = `XON::${id}`;
+        const cached = getCachedDetails(cacheKey);
+        if (cached) return cached;
+
+        try {
+            const rawId = id.slice('xon:'.length);
+            const details = await fetchXonDetails(rawId);
+            if (details) {
+                const episodes = (details.episodes || []).map((ep: any) => ({
+                    id: `xon:${ep.id}`,
+                    title: ep.title,
+                    number: ep.episode ?? ep.number ?? 0,
+                    season: ep.season ?? 1,
+                    coverImage: ep.poster || undefined,
+                    description: ep.description,
+                    sourceMovieId: `xon:${details.id}`,
+                }));
+
+                // If the ID was an episode and we have no episode list, synthesize a single episode entry.
+                const isEpisodeId = rawId.startsWith('episode:');
+                const synthEpisodes = isEpisodeId && episodes.length === 0
+                    ? [{
+                        id,
+                        title: details.title,
+                        number: 1,
+                        season: 1,
+                        coverImage: details.poster || undefined,
+                        description: details.description,
+                        sourceMovieId: id,
+                    }]
+                    : undefined;
+
+                const mapped: MovieDetails = {
+                    id: `xon:${details.id}`,
+                    title: details.title,
+                    description: details.description,
+                    coverImage: details.poster || '',
+                    backgroundImage: details.backdrop || undefined,
+                    episodes: episodes.length ? episodes : synthEpisodes,
+                    seasons: undefined,
+                    tags: undefined,
+                };
+                setCachedDetails(cacheKey, mapped);
+                return mapped;
+            }
+        } catch (e) {
+            console.error('[api] xon direct fetchDetails failed', e);
+        }
+        console.warn('[api] xon direct fetchDetails returned null', id);
+        // fall through to provider-based resolution
+    }
+
+    const base = await getProviderWithName();
+    const { providerName, provider } = resolveProviderForId(id, base.providerName);
     const cacheKey = `${providerName}::${id}`;
 
     try {
@@ -85,7 +148,21 @@ export async function fetchDetails(id: string): Promise<MovieDetails | null> {
         console.error('[api] fetchDetails failed, using cache if available', e);
     }
 
-    return getCachedDetails(cacheKey);
+    const cached = getCachedDetails(cacheKey);
+    if (cached) return cached;
+
+    // Last-resort stub for xon:* to avoid empty page
+    if (id.startsWith('xon:')) {
+        return {
+            id,
+            title: 'Unavailable',
+            coverImage: '',
+            description: 'Content could not be loaded.',
+            episodes: [{ id, title: 'Unavailable', number: 1, season: 1, sourceMovieId: id }],
+        } as MovieDetails;
+    }
+
+    return null;
 }
 
 export async function fetchStreamUrl(
@@ -93,7 +170,33 @@ export async function fetchStreamUrl(
     episodeId: string,
     languageId?: number | string
 ): Promise<VideoResponse | null> {
-    const { providerName, provider } = await getProviderWithName();
+    if (episodeId.startsWith('xon:') || movieId.startsWith('xon:')) {
+        const cacheKey = `XON::${movieId}::${episodeId}::${languageId ?? ''}`;
+        const cached = getCachedStream(cacheKey);
+        if (cached) return cached;
+
+        try {
+            const stream = await fetchXonStream((episodeId || movieId).replace(/^xon:/, ''));
+            if (stream) {
+                const mapped: VideoResponse = {
+                    videoUrl: stream.qualities?.[0]?.url || '',
+                    qualities: stream.qualities?.map((q) => ({ quality: q.label, url: q.url })) || [],
+                    subtitles: [],
+                    headers: {},
+                };
+                setCachedStream(cacheKey, mapped);
+                return mapped;
+            }
+        } catch (e) {
+            console.error('[api] xon direct fetchStreamUrl failed', e);
+        }
+        console.warn('[api] xon direct fetchStreamUrl returned null', { movieId, episodeId });
+        // fall through to provider-based resolution
+    }
+
+    const base = await getProviderWithName();
+    const hintId = episodeId || movieId;
+    const { providerName, provider } = resolveProviderForId(hintId, base.providerName);
     const cacheKey = `${providerName}::${movieId}::${episodeId}::${languageId ?? ''}`;
 
     try {
@@ -112,7 +215,12 @@ export async function fetchStreamUrl(
 // Helper to switch provider (Server Action)
 export async function setProviderAction(providerName: string) {
     const cookieStore = await cookies();
-    cookieStore.set('provider', providerName, { secure: true, httpOnly: true, sameSite: 'strict' });
+    const isProd = process.env.NODE_ENV === 'production';
+    cookieStore.set('provider', providerName, {
+        secure: isProd, // allow localhost/http during development
+        httpOnly: true,
+        sameSite: 'strict',
+    });
 }
 
 export async function getProviderNameAction(): Promise<string> {

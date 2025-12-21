@@ -15,9 +15,10 @@ export default async function WatchPage({
     const showOpenDownload = providerName !== 'MeowVerse';
 
     const { id } = await params;
+    const decodedId = decodeURIComponent(id);
 
     // Fetch details
-    const details = await fetchDetails(id);
+    const details = await fetchDetails(decodedId);
 
     if (!details) {
         return <div className="container">Error loading content.</div>;
@@ -26,6 +27,7 @@ export default async function WatchPage({
     // Determine episode to play
     // Check searchParams for 'ep' ID, otherwise default to first available
     const { ep, season } = await searchParams;
+    const decodedEp = ep ? decodeURIComponent(ep) : undefined;
 
     // Group episodes by season
     const episodesBySeason: { [key: number]: typeof details.episodes } = {};
@@ -55,7 +57,7 @@ export default async function WatchPage({
             ? requestedSeason
             : undefined;
 
-    const epFromParam = details.episodes?.find(e => e.id === ep);
+    const epFromParam = details.episodes?.find(e => e.id === decodedEp);
     const epFromRequestedSeason = safeSeason ? episodesBySeason[safeSeason]?.[0] : undefined;
 
     // Decide what to play:
@@ -145,7 +147,7 @@ export default async function WatchPage({
 
                 {showEpisodeUi && seasonNumbers.length > 0 && (
                     <SeasonSwitcher
-                        showId={id}
+                        showId={decodedId}
                         selectedSeason={selectedSeason}
                         currentEpisodeId={currentEpisode?.id}
                         options={seasonNumbers.map(s => ({
@@ -165,7 +167,7 @@ export default async function WatchPage({
                                 {episodesBySeason[selectedSeason]?.map(epItem => (
                                     <a
                                         key={epItem.id}
-                                        href={`/watch/${id}?season=${selectedSeason}&ep=${epItem.id}`}
+                                        href={`/watch/${encodeURIComponent(decodedId)}?season=${selectedSeason}&ep=${encodeURIComponent(epItem.id)}`}
                                         className={`episode-item ${epItem.id === currentEpisode?.id ? 'active' : ''}`}
                                     >
                                         <div className="episode-number">Ep {epItem.number}</div>

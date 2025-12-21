@@ -54,6 +54,28 @@ export default function VideoPlayer({
     const [isLoading, setIsLoading] = useState(false);
     const [isMounted, setIsMounted] = useState(false);
 
+    const scoreQualityLabel = (label: string): number => {
+        const s = String(label || '').toLowerCase();
+        const pMatch = s.match(/(\d{3,4})\s*p/);
+        if (pMatch?.[1]) return Number.parseInt(pMatch[1], 10);
+        const kbpsMatch = s.match(/(\d{2,6})\s*kbps/);
+        if (kbpsMatch?.[1]) return Number.parseInt(kbpsMatch[1], 10) / 1000;
+
+        if (s.includes('uhd') || s.includes('4k')) return 2160;
+        if (s.includes('fhd') || s.includes('1080')) return 1080;
+        if (s.includes('hd') || s.includes('720')) return 720;
+        if (s.includes('sd') || s.includes('480')) return 480;
+        if (s.includes('basic') || s.includes('low') || s.includes('360')) return 360;
+        return 0;
+    };
+
+    const sortedQualities: Quality[] = (() => {
+        if (!qualities?.length) return [];
+        return [...qualities]
+            .filter((q) => q?.url)
+            .sort((a, b) => scoreQualityLabel(b.quality) - scoreQualityLabel(a.quality));
+    })();
+
     useEffect(() => {
         setIsMounted(true);
     }, []);
@@ -209,9 +231,22 @@ export default function VideoPlayer({
                         return { id: idx, label: `Level ${idx + 1}` };
                     });
                     setInternalQualityLevels(levelLabels);
-                    // default to auto
-                    setCurrentQuality(-1);
-                    hls.currentLevel = -1;
+
+                    // Default to highest level (best height/bitrate)
+                    let bestLevel = 0;
+                    let bestScore = -1;
+                    for (let i = 0; i < hls.levels.length; i++) {
+                        const lvl: any = hls.levels[i];
+                        const height = typeof lvl?.height === 'number' ? lvl.height : 0;
+                        const bitrate = typeof lvl?.bitrate === 'number' ? lvl.bitrate : 0;
+                        const score = (height || 0) * 1_000_000 + (bitrate || 0);
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestLevel = i;
+                        }
+                    }
+                    setCurrentQuality(bestLevel);
+                    hls.currentLevel = bestLevel;
                 } else {
                     setUseInternalQuality(false);
                     setInternalQualityLevels([]);
@@ -344,8 +379,8 @@ export default function VideoPlayer({
             let newUrl: string | null = null;
 
             // If changing quality and qualities array exists, use the quality URL
-            if (res !== undefined && qualities && qualities[res]) {
-                newUrl = qualities[res].url;
+            if (!useInternalQuality && res !== undefined && sortedQualities && sortedQualities[res]) {
+                newUrl = sortedQualities[res].url;
                 setCurrentQuality(res);
             }
             // Otherwise call API for audio change
@@ -379,18 +414,20 @@ export default function VideoPlayer({
 
     const displayQualityOptions = useInternalQuality
         ? [{ id: -1, label: 'Auto' }, ...internalQualityLevels]
-        : qualities.map((q, idx) => ({ id: idx, label: q.quality }));
+        : sortedQualities.map((q, idx) => ({ id: idx, label: q.quality }));
 
     useEffect(() => {
         // Default audio selection to first option when not provided
         if (currentAudio === undefined && displayAudioTracks.length > 0) {
             setCurrentAudio(displayAudioTracks[0].id);
         }
-        // Default quality selection to first external option (matches our defaultSource)
+        // Default quality selection to highest external option
         if (!useInternalQuality && currentQuality === null && displayQualityOptions.length > 0) {
-            setCurrentQuality(displayQualityOptions[0].id);
+            const best = displayQualityOptions[0].id;
+            setCurrentQuality(best);
+            if (sortedQualities[best]?.url) setUrl(sortedQualities[best].url);
         }
-    }, [currentAudio, currentQuality, displayAudioTracks, displayQualityOptions, useInternalQuality]);
+    }, [currentAudio, currentQuality, displayAudioTracks, displayQualityOptions, useInternalQuality, sortedQualities]);
 
     // Add keyboard controls
     useEffect(() => {

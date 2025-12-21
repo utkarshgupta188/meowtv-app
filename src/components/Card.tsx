@@ -15,7 +15,7 @@ export default function Card({ id, title, image }: CardProps) {
 
     return (
         <Link
-            href={`/watch/${id}`}
+            href={`/watch/${encodeURIComponent(String(id))}`}
             className="card"
             suppressHydrationWarning
             aria-label={safeTitle || 'Open'}

@@ -1,11 +1,9 @@
 import Link from 'next/link';
-import React from 'react';
 
 interface CardProps {
     id: string | number;
     title: string;
     image: string;
-    type?: number;
 }
 
 export default function Card({ id, title, image }: CardProps) {
@@ -17,10 +15,12 @@ export default function Card({ id, title, image }: CardProps) {
         <Link
             href={`/watch/${encodeURIComponent(String(id))}`}
             className="card"
-            suppressHydrationWarning
             aria-label={safeTitle || 'Open'}
         >
             <img src={imageUrl} alt={title} loading="lazy" />
+            <div className="card-overlay" aria-hidden="true">
+                <span className="card-chip">Play</span>
+            </div>
             {safeTitle ? (
                 <div className="card-info">
                     <div className="card-title">{safeTitle}</div>

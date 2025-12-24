@@ -15,18 +15,40 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body>
+    <html lang="en">
+      <body className="app-body">
         <nav className="navbar">
-          <Link href="/" className="logo">MeowTV</Link>
-          <div className="nav-links">
-            <ProviderSwitcher />
-            <Link href="/" className="nav-link">Home</Link>
+          <div className="nav-shell">
+            <div className="nav-left">
+              <Link href="/" className="logo">
+                <span className="logo-mark" aria-hidden="true" />
+                <span className="logo-type">MeowTV</span>
+              </Link>
+              <div className="nav-links">
+                <Link href="/" className="nav-link">Home</Link>
+              </div>
+            </div>
+
+            <div className="nav-right">
+              <SearchBar />
+              <div className="nav-controls">
+                <ProviderSwitcher />
+              </div>
+            </div>
           </div>
-          <SearchBar />
         </nav>
-        <main>
+        <main className="page-shell">
           {children}
+          <footer className="footer">
+            <div className="footer-content">
+              <p>This site does not store any files on our server, we only link to media which is hosted on 3rd party services.</p>
+              <p>Made With 💚 By <strong>Utkarsh Gupta</strong> | <a href="https://github.com/utkarshgupta188" target="_blank" rel="noopener noreferrer" className="footer-link">GitHub</a></p>
+              <div className="footer-links">
+                <Link href="/dmca" className="footer-link">DMCA</Link>
+              </div>
+              <p>© 2025 MeowTV</p>
+            </div>
+          </footer>
         </main>
       </body>
     </html>

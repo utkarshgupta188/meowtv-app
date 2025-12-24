@@ -10,7 +10,7 @@ export default async function SearchPage({
     const results = query ? await searchContent(query) : [];
 
     return (
-        <div className="container">
+        <div className="container page-pad">
             <h2 className="section-header">
                 {query ? `Results for "${query}"` : 'Search'}
             </h2>

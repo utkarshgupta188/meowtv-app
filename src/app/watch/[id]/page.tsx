@@ -21,7 +21,7 @@ export default async function WatchPage({
     const details = await fetchDetails(decodedId);
 
     if (!details) {
-        return <div className="container">Error loading content.</div>;
+        return <div className="container page-pad">Error loading content.</div>;
     }
 
     // Determine episode to play
@@ -115,7 +115,7 @@ export default async function WatchPage({
     })) || [];
 
     return (
-        <div className="container">
+        <div className="container page-pad">
             {videoData?.videoUrl ? (
                 <VideoPlayer
                     key={currentEpisode?.id} // Force remount on episode change

@@ -1,9 +1,17 @@
-import { fetchHome } from '@/lib/api';
-import { fetchDetails } from '@/lib/api';
-import Card from '@/components/Card';
-import Link from 'next/link';
+import { randomInt } from 'node:crypto';
 
-export const revalidate = 60; // Revalidate every minute
+import { fetchDetails, fetchHome } from '@/lib/api';
+import Card from '@/components/Card';
+import HeroRotator from '@/components/HeroRotator';
+
+export const dynamic = 'force-dynamic';
+
+function shuffleInPlace<T>(arr: T[]): void {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
 
 export default async function Home() {
   const rows = await fetchHome();
@@ -11,41 +19,84 @@ export default async function Home() {
   const featuredId = rows?.[0]?.contents?.[0]?.id;
   const featured = featuredId ? await fetchDetails(featuredId) : null;
 
+  const candidateIds = Array.from(
+    new Set(
+      rows
+        .flatMap((r) => r?.contents ?? [])
+        .map((c) => c?.id)
+        .filter((v): v is string => Boolean(v))
+    )
+  );
+
+  // On each request, pick a random set of hero items and only rotate among those.
+  // Only include items that have a full-size backdrop.
+  const TARGET_HERO_ITEMS = 10;
+  const MAX_CANDIDATE_FETCH = 90;
+  const BATCH_SIZE = 30;
+
+  const shuffledIds = [...candidateIds];
+  shuffleInPlace(shuffledIds);
+
+  const heroItems: Array<{
+    id: string;
+    title: string;
+    description?: string;
+    year?: number;
+    score?: number;
+    coverImage?: string;
+    backgroundImage?: string;
+  }> = [];
+  const seenHeroIds = new Set<string>();
+
+  const maxToFetch = Math.min(shuffledIds.length, MAX_CANDIDATE_FETCH);
+  for (let start = 0; start < maxToFetch && heroItems.length < TARGET_HERO_ITEMS; start += BATCH_SIZE) {
+    const batchIds = shuffledIds.slice(start, start + BATCH_SIZE);
+    const batchDetails = await Promise.allSettled(batchIds.map((id) => fetchDetails(id)));
+
+    for (const r of batchDetails) {
+      if (r.status !== 'fulfilled') continue;
+      const d = r.value;
+      if (!d || !d.id) continue;
+      if (!d.backgroundImage) continue;
+      if (seenHeroIds.has(d.id)) continue;
+      seenHeroIds.add(d.id);
+      heroItems.push({
+        id: d.id,
+        title: d.title,
+        description: d.description,
+        year: d.year,
+        score: d.score,
+        coverImage: d.coverImage,
+        backgroundImage: d.backgroundImage,
+      });
+      if (heroItems.length >= TARGET_HERO_ITEMS) break;
+    }
+  }
+
   return (
     <>
-      {featured ? (
+      {heroItems.length > 0 ? (
         <section className="hero">
-          <div
-            className="hero-backdrop"
-            style={{
-              backgroundImage: `url(${featured.backgroundImage || featured.coverImage})`,
-            }}
+          <HeroRotator items={heroItems} intervalMs={5000} />
+        </section>
+      ) : featured && featured.backgroundImage ? (
+        <section className="hero">
+          <HeroRotator
+            items={[{
+              id: featured.id,
+              title: featured.title,
+              description: featured.description,
+              year: featured.year,
+              score: featured.score,
+              coverImage: featured.coverImage,
+              backgroundImage: featured.backgroundImage,
+            }]}
+            intervalMs={5000}
           />
-          <div className="hero-overlay" />
-          <div className="container hero-content">
-            <h1 className="hero-title">{featured.title}</h1>
-            <div className="hero-meta">
-              {featured.year ? <span>{featured.year}</span> : null}
-              {featured.score ? (
-                <span>{featured.year ? ' • ' : ''}{featured.score}</span>
-              ) : null}
-            </div>
-            {featured.description ? (
-              <p className="hero-description">{featured.description}</p>
-            ) : null}
-            <div className="hero-actions">
-              <Link href={`/watch/${featured.id}`} className="btn btn-primary">
-                Play
-              </Link>
-              <Link href={`/watch/${featured.id}`} className="btn btn-secondary">
-                More Info
-              </Link>
-            </div>
-          </div>
         </section>
       ) : null}
 
-      <div className="container">
+      <div className="container page-pad">
         {rows.length === 0 ? (
           <div className="empty-state">
             <h2>No content loaded.</h2>

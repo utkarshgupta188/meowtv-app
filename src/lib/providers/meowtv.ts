@@ -282,19 +282,17 @@ export const MeowTvProvider: Provider = {
                                     resolution === 1 ? '480p' :
                                         `${resolution}p`;
 
-                        const proxiedVideoUrl = `/api/hls?url=${encodeURIComponent(data.videoUrl)}&referer=${encodeURIComponent(MAIN_URL)}`;
-                        collectedQualities.push({ quality: qualityLabel, url: proxiedVideoUrl });
+                        // Try direct URL first - MeowTV streams likely don't require auth
+                        collectedQualities.push({ quality: qualityLabel, url: data.videoUrl });
 
                         if (!bestVideoUrl) {
-                            bestVideoUrl = proxiedVideoUrl;
+                            bestVideoUrl = data.videoUrl;
                             bestSubtitles = (data.subtitles || []).map((s: any) => {
                                 const lang = s.abbreviate || s.title || 'Unknown';
                                 const rawUrl = s.url || '';
-                                const proxiedSubUrl = rawUrl
-                                    ? `/api/hls?url=${encodeURIComponent(rawUrl)}&referer=${encodeURIComponent(MAIN_URL)}`
-                                    : '';
                                 const label = s.title || lang || 'Subtitles';
-                                return { language: lang, label, url: proxiedSubUrl };
+                                // Direct subtitle URLs
+                                return { language: lang, label, url: rawUrl };
                             }).filter((s: any) => Boolean(s.url));
                         }
                     } else {

@@ -17,7 +17,7 @@ export default async function Home() {
   const rows = await fetchHome();
 
   const featuredId = rows?.[0]?.contents?.[0]?.id;
-  const featured = featuredId ? await fetchDetails(featuredId) : null;
+  const featured = featuredId ? await fetchDetails(featuredId, false) : null;
 
   const candidateIds = Array.from(
     new Set(
@@ -51,7 +51,8 @@ export default async function Home() {
   const maxToFetch = Math.min(shuffledIds.length, MAX_CANDIDATE_FETCH);
   for (let start = 0; start < maxToFetch && heroItems.length < TARGET_HERO_ITEMS; start += BATCH_SIZE) {
     const batchIds = shuffledIds.slice(start, start + BATCH_SIZE);
-    const batchDetails = await Promise.allSettled(batchIds.map((id) => fetchDetails(id)));
+    // Skip episode fetching for hero items - we only need metadata
+    const batchDetails = await Promise.allSettled(batchIds.map((id) => fetchDetails(id, false)));
 
     for (const r of batchDetails) {
       if (r.status !== 'fulfilled') continue;

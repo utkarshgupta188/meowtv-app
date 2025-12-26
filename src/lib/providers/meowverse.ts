@@ -64,6 +64,88 @@ async function bypass(mainUrl: string): Promise<string> {
     }
 }
 
+// Helper function to fetch all pages from paginated endpoints
+async function fetchAllPages(
+    baseUrl: string,
+    headers: HeadersInit,
+    episodeProcessor: (ep: any) => Episode
+): Promise<Episode[]> {
+    const allEpisodes: Episode[] = [];
+    let currentPage = 1;
+    let hasMorePages = true;
+
+    while (hasMorePages) {
+        try {
+            const url = currentPage === 1 ? baseUrl : `${baseUrl}&page=${currentPage}`;
+            console.log(`[CNC Verse] Fetching page ${currentPage}: ${url}`);
+
+            const res = await fetch(url, { headers });
+            const data = await res.json();
+
+            if (data.episodes && data.episodes.length > 0) {
+                data.episodes.forEach((ep: any) => {
+                    if (ep) allEpisodes.push(episodeProcessor(ep));
+                });
+                console.log(`[CNC Verse] Page ${currentPage}: Found ${data.episodes.length} episodes`);
+                console.log(`[CNC Verse] Pagination fields:`, {
+                    nextPageShow: data.nextPageShow,
+                    nextPage: data.nextPage,
+                    nextPageSeason: data.nextPageSeason,
+                    currentPage: currentPage
+                });
+
+                // Check nextPageShow field first - if it's 0, there are no more pages
+                if (data.nextPageShow === 0 || data.nextPageShow === '0') {
+                    console.log(`[CNC Verse] nextPageShow is 0, no more pages available`);
+                    hasMorePages = false;
+                } else if (data.nextPage && currentPage >= data.nextPage) {
+                    // If current page matches or exceeds nextPage, we're on the last page
+                    console.log(`[CNC Verse] currentPage (${currentPage}) >= nextPage (${data.nextPage}), stopping`);
+                    hasMorePages = false;
+                } else if (data.episodes.length < 10) {
+                    // If we got fewer than 10 episodes, this is the last page
+                    console.log(`[CNC Verse] Got ${data.episodes.length} episodes (less than 10), stopping pagination`);
+                    hasMorePages = false;
+                } else if (data.nextPageShow === 1 || data.nextPageShow === '1') {
+                    // Explicit indicator that there's a next page
+                    console.log(`[CNC Verse] nextPageShow is 1, fetching next page`);
+                    hasMorePages = true;
+                } else if (data.nextPage && currentPage < data.nextPage) {
+                    // If nextPage is greater than current page, continue
+                    console.log(`[CNC Verse] currentPage (${currentPage}) < nextPage (${data.nextPage}), continuing`);
+                    hasMorePages = true;
+                } else if (currentPage === 1 && data.episodes.length === 10) {
+                    // On first page with 10 episodes, try page 2
+                    console.log(`[CNC Verse] First page with 10 episodes, trying page 2`);
+                    hasMorePages = true;
+                } else {
+                    // Default: stop
+                    console.log(`[CNC Verse] No clear pagination indicator, stopping`);
+                    hasMorePages = false;
+                }
+            } else {
+                console.log(`[CNC Verse] Page ${currentPage}: No episodes found, stopping pagination`);
+                hasMorePages = false;
+                break;
+            }
+
+            currentPage++;
+
+            // Safety limit to prevent infinite loops
+            if (currentPage > 100) {
+                console.warn('[CNC Verse] Reached page limit of 100, stopping pagination');
+                break;
+            }
+        } catch (err) {
+            console.error(`[CNC Verse] Error fetching page ${currentPage}:`, err);
+            hasMorePages = false;
+        }
+    }
+
+    console.log(`[CNC Verse] Total episodes fetched: ${allEpisodes.length} across ${currentPage - 1} pages`);
+    return allEpisodes;
+}
+
 export const MeowVerseProvider: Provider = {
     name: 'MeowVerse',
 
@@ -136,7 +218,7 @@ export const MeowVerseProvider: Provider = {
         }
     },
 
-    async fetchDetails(id: string): Promise<MovieDetails | null> {
+    async fetchDetails(id: string, includeEpisodes: boolean = true): Promise<MovieDetails | null> {
         try {
             const cookieValue = await bypass(MAIN_URL);
             const time = Math.floor(Date.now() / 1000);
@@ -187,34 +269,36 @@ export const MeowVerseProvider: Provider = {
 
             const episodes: Episode[] = [];
 
-            if (data.episodes && data.episodes[0]) {
-                data.episodes.forEach((ep: any) => {
-                    if (!ep) return;
-                    episodes.push({
-                        id: ep.id,
-                        title: ep.t,
-                        season: parseInt(ep.s?.replace('S', '') || '1'),
-                        number: parseInt(ep.ep?.replace('E', '') || '1'),
-                        coverImage: `https://imgcdn.kim/epimg/150/${ep.id}.jpg`,
-                        sourceMovieId: id,
-                        tracks: audioTracksFromPost as any
-                    });
-                });
+            if (includeEpisodes) {
+                if (data.episodes && data.episodes[0]) {
+                    // Fetch all pages for the current season shown in post.php
+                    const baseUrl = `${MAIN_URL}/post.php?id=${id}&t=${time}`;
+                    const paginatedEpisodes = await fetchAllPages(
+                        baseUrl,
+                        headers,
+                        (ep: any) => ({
+                            id: ep.id,
+                            title: ep.t,
+                            season: parseInt(ep.s?.replace('S', '') || '1'),
+                            number: parseInt(ep.ep?.replace('E', '') || '1'),
+                            coverImage: `https://imgcdn.kim/epimg/150/${ep.id}.jpg`,
+                            sourceMovieId: id,
+                            tracks: audioTracksFromPost as any
+                        })
+                    );
+                    episodes.push(...paginatedEpisodes);
 
-                // Fetch additional seasons (skip last one as it's shown above)
-                if (data.season && data.season.length > 1) {
-                    const additionalSeasons = data.season.slice(0, -1);
+                    // Fetch additional seasons (skip last one as it's shown above)
+                    if (data.season && data.season.length > 1) {
+                        const additionalSeasons = data.season.slice(0, -1);
 
-                    for (const season of additionalSeasons) {
-                        try {
-                            const seasonUrl = `${MAIN_URL}/episodes.php?s=${season.id}&series=${id}&t=${time}&page=1`;
-                            const seasonRes = await fetch(seasonUrl, { headers });
-                            const seasonData = await seasonRes.json();
-
-                            if (seasonData.episodes) {
-                                seasonData.episodes.forEach((ep: any) => {
-                                    if (!ep) return;
-                                    episodes.push({
+                        for (const season of additionalSeasons) {
+                            try {
+                                const baseUrl = `${MAIN_URL}/episodes.php?s=${season.id}&series=${id}&t=${time}`;
+                                const seasonEpisodes = await fetchAllPages(
+                                    baseUrl,
+                                    headers,
+                                    (ep: any) => ({
                                         id: ep.id,
                                         title: ep.t,
                                         season: parseInt(ep.s?.replace('S', '') || '1'),
@@ -222,27 +306,29 @@ export const MeowVerseProvider: Provider = {
                                         coverImage: `https://imgcdn.kim/epimg/150/${ep.id}.jpg`,
                                         sourceMovieId: id,
                                         tracks: audioTracksFromPost as any
-                                    });
-                                });
+                                    })
+                                );
+                                episodes.push(...seasonEpisodes);
+                            } catch (err) {
+                                console.error(`Failed to fetch season ${season.id}:`, err);
                             }
-                        } catch (err) {
-                            console.error(`Failed to fetch season ${season.id}:`, err);
                         }
                     }
+                } else {
+                    episodes.push({
+                        id: id,
+                        title: data.title,
+                        number: 1,
+                        season: 1,
+                        sourceMovieId: id,
+                        tracks: audioTracksFromPost as any
+                    });
                 }
-            } else {
-                episodes.push({
-                    id: id,
-                    title: data.title,
-                    number: 1,
-                    season: 1,
-                    sourceMovieId: id,
-                    tracks: audioTracksFromPost as any
-                });
+
+                // Sort episodes
+                episodes.sort((a, b) => (a.season - b.season) || (a.number - b.number));
             }
 
-            // Sort episodes
-            episodes.sort((a, b) => (a.season - b.season) || (a.number - b.number));
 
             return {
                 id: id,

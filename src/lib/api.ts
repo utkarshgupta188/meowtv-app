@@ -80,7 +80,7 @@ export async function searchContent(query: string): Promise<ContentItem[]> {
 }
 
 // Details: try direct Xon first (cached), then provider-based resolution
-export async function fetchDetails(id: string): Promise<MovieDetails | null> {
+export async function fetchDetails(id: string, includeEpisodes: boolean = true): Promise<MovieDetails | null> {
     if (id.startsWith('xon:')) {
         const cacheKey = `XON::${id}`;
         const cached = getCachedDetails(cacheKey);
@@ -139,7 +139,7 @@ export async function fetchDetails(id: string): Promise<MovieDetails | null> {
     const cacheKey = `${providerName}::${id}`;
 
     try {
-        const details = await provider.fetchDetails(id);
+        const details = await provider.fetchDetails(id, includeEpisodes);
         if (details) {
             setCachedDetails(cacheKey, details);
             return details;

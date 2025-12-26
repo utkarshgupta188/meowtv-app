@@ -2,7 +2,7 @@ export interface Provider {
     name: string;
     fetchHome(page: number): Promise<HomePageRow[]>;
     search(query: string): Promise<ContentItem[]>;
-    fetchDetails(id: string): Promise<MovieDetails | null>;
+    fetchDetails(id: string, includeEpisodes?: boolean): Promise<MovieDetails | null>;
     fetchStreamUrl(movieId: string, episodeId: string, languageId?: number | string): Promise<VideoResponse | null>;
 }
 

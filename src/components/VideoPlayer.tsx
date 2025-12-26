@@ -53,6 +53,7 @@ export default function VideoPlayer({
 
     const [isLoading, setIsLoading] = useState(false);
     const [isMounted, setIsMounted] = useState(false);
+    const [currentSubtitle, setCurrentSubtitle] = useState<number>(-1);
 
     const scoreQualityLabel = (label: string): number => {
         const s = String(label || '').toLowerCase();
@@ -158,202 +159,270 @@ export default function VideoPlayer({
         const video = videoRef.current;
         if (!video) return;
 
-        // Detect HLS even if wrapped in proxy
-        let isHls = url.includes('.m3u8') || url.includes('/api/hls?');
-        if (url.includes('/api/proxy') || url.includes('/api/hls?')) {
-            try {
-                const params = new URLSearchParams(url.split('?')[1]);
-                const realUrl = params.get('url');
-                if (realUrl && realUrl.includes('.m3u8')) {
-                    isHls = true;
+        // Handle blob: prefix for client-side playlist fetching
+        let processedUrl = url;
+        let cleanupBlobUrl: string | null = null;
+
+        const setupVideo = async () => {
+            // Check if URL has blob: prefix (MeowToon playlists)
+            if (url.startsWith('blob:')) {
+                const actualUrl = url.slice('blob:'.length);
+                console.log('[VideoPlayer] Fetching playlist client-side from:', actualUrl);
+
+                try {
+                    const response = await fetch(actualUrl);
+                    const playlistText = await response.text();
+                    console.log('[VideoPlayer] Playlist fetched, creating blob URL');
+
+                    // Create a blob URL from the playlist
+                    const blob = new Blob([playlistText], { type: 'application/vnd.apple.mpegurl' });
+                    const blobUrl = URL.createObjectURL(blob);
+                    cleanupBlobUrl = blobUrl;
+                    processedUrl = blobUrl;
+                } catch (err) {
+                    console.error('[VideoPlayer] Failed to fetch playlist:', err);
+                    setError('Failed to load playlist');
+                    return;
                 }
-            } catch (e) {
-                // ignore parsing error
-            }
-        }
-
-        const onError = (e: Event) => {
-            const target = e.target as HTMLVideoElement;
-            const err = target.error;
-            console.error("Video Error Details:", {
-                code: err?.code,
-                message: err?.message,
-                networkState: target.networkState,
-                readyState: target.readyState,
-                currentSrc: target.currentSrc
-            });
-            setError(`Playback Error (${err?.code || 'Unknown'}). Format may not be supported.`);
-        };
-
-        video.addEventListener('error', onError);
-
-        if (isHls && Hls.isSupported()) {
-            if (hlsRef.current) {
-                hlsRef.current.destroy();
             }
 
-            const hls = new Hls({
-                enableWorker: true,
-                // These are VOD-style streams; low-latency mode can increase buffer/codec edge cases.
-                lowLatencyMode: false,
-                // Some sources are slow on the first fragment; avoid spurious timeouts.
-                fragLoadingTimeOut: 20000,
-                xhrSetup: function (xhr, url) {
-                    xhr.withCredentials = false; // Avoid CORS issues with some proxies if not needed
-                },
-            });
-            hlsRef.current = hls;
+            // Detect HLS even if wrapped in proxy
+            let isHls = processedUrl.includes('.m3u8') || processedUrl.includes('/api/hls?') || processedUrl.startsWith('blob:');
+            if (processedUrl.includes('/api/proxy') || processedUrl.includes('/api/hls?')) {
+                try {
+                    const params = new URLSearchParams(processedUrl.split('?')[1]);
+                    const realUrl = params.get('url');
+                    if (realUrl && realUrl.includes('.m3u8')) {
+                        isHls = true;
+                    }
+                } catch (e) {
+                    // ignore parsing error
+                }
+            }
 
-            hls.loadSource(url);
-            hls.attachMedia(video);
+            const onError = (e: Event) => {
+                const target = e.target as HTMLVideoElement;
+                const err = target.error;
+                console.error("Video Error Details:", {
+                    code: err?.code,
+                    message: err?.message,
+                    networkState: target.networkState,
+                    readyState: target.readyState,
+                    currentSrc: target.currentSrc
+                });
+                setError(`Playback Error (${err?.code || 'Unknown'}). Format may not be supported.`);
+            };
 
-            hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                // Check if HLS has multiple audio tracks (internal switching)
-                if (hls.audioTracks && hls.audioTracks.length > 1) {
-                    setUseInternalAudio(true);
-                    setInternalAudioTracks(hls.audioTracks.map((t, i) => ({
-                        id: i,
-                        name: t.name || t.lang || `Audio ${i + 1}`
-                    })));
-                } else {
-                    setUseInternalAudio(false);
-                    setInternalAudioTracks([]);
+            video.addEventListener('error', onError);
+
+            if (isHls && Hls.isSupported()) {
+                if (hlsRef.current) {
+                    hlsRef.current.destroy();
                 }
 
-                // Internal quality switching from HLS variant levels
-                if (hls.levels && hls.levels.length > 1) {
-                    setUseInternalQuality(true);
-                    const levelLabels = hls.levels.map((lvl, idx) => {
-                        const h = (lvl as any).height as number | undefined;
-                        const br = (lvl as any).bitrate as number | undefined;
-                        if (h && Number.isFinite(h)) return { id: idx, label: `${h}p` };
-                        if (br && Number.isFinite(br)) return { id: idx, label: `${Math.round(br / 1000)} kbps` };
-                        return { id: idx, label: `Level ${idx + 1}` };
+                const hls = new Hls({
+                    enableWorker: true,
+                    // These are VOD-style streams; low-latency mode can increase buffer/codec edge cases.
+                    lowLatencyMode: false,
+                    // Some sources are slow on the first fragment; avoid spurious timeouts.
+                    fragLoadingTimeOut: 20000,
+                    // Aggressive buffer settings for faster loading
+                    maxBufferLength: 60, // Buffer up to 60 seconds ahead
+                    maxMaxBufferLength: 120, // Allow up to 2 minutes buffer
+                    maxBufferSize: 100 * 1000 * 1000, // 100 MB max buffer
+                    maxBufferHole: 0.5, // Tolerate small buffer gaps
+                    // CRITICAL: Minimize initial buffering delay
+                    backBufferLength: 10, // Keep 10s of back buffer
+                    frontBufferFlushThreshold: 600, // Only flush when buffer is huge
+                    // Start playback ASAP with minimal buffer
+                    startFragPrefetch: true, // Prefetch first fragment
+                    testBandwidth: true, // Test bandwidth for better quality selection
+                    startLevel: -1, // Auto quality selection
+                    // Reduce initial buffering delay to minimum
+                    liveSyncDurationCount: 1, // Start with just 1 fragment
+                    liveMaxLatencyDurationCount: 3, // Very low latency tolerance
+                    // More aggressive fragment loading
+                    maxFragLookUpTolerance: 0.1,
+                    progressive: true, // Enable progressive streaming
+                    xhrSetup: function (xhr, url) {
+                        xhr.withCredentials = false;
+                    },
+                });
+                hlsRef.current = hls;
+
+                hls.loadSource(processedUrl);
+                hls.attachMedia(video);
+
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    console.log('[VideoPlayer] HLS Manifest Parsed:', {
+                        audioTracks: hls.audioTracks?.length || 0,
+                        levels: hls.levels?.length || 0,
+                        levelDetails: hls.levels?.map((lvl: any) => ({
+                            height: lvl.height,
+                            width: lvl.width,
+                            bitrate: lvl.bitrate,
+                            url: lvl.url?.[0]
+                        }))
                     });
-                    setInternalQualityLevels(levelLabels);
 
-                    // Default to highest level (best height/bitrate)
-                    let bestLevel = 0;
-                    let bestScore = -1;
-                    for (let i = 0; i < hls.levels.length; i++) {
-                        const lvl: any = hls.levels[i];
-                        const height = typeof lvl?.height === 'number' ? lvl.height : 0;
-                        const bitrate = typeof lvl?.bitrate === 'number' ? lvl.bitrate : 0;
-                        const score = (height || 0) * 1_000_000 + (bitrate || 0);
-                        if (score > bestScore) {
-                            bestScore = score;
-                            bestLevel = i;
+                    // Check if HLS has multiple audio tracks (internal switching)
+                    if (hls.audioTracks && hls.audioTracks.length > 1) {
+                        setUseInternalAudio(true);
+                        setInternalAudioTracks(hls.audioTracks.map((t, i) => ({
+                            id: i,
+                            name: t.name || t.lang || `Audio ${i + 1}`
+                        })));
+                    } else {
+                        setUseInternalAudio(false);
+                        setInternalAudioTracks([]);
+                    }
+
+                    // Internal quality switching from HLS variant levels
+                    if (hls.levels && hls.levels.length > 1) {
+                        console.log('[VideoPlayer] Enabling internal quality switching with', hls.levels.length, 'levels');
+                        setUseInternalQuality(true);
+                        const levelLabels = hls.levels.map((lvl, idx) => {
+                            const h = (lvl as any).height as number | undefined;
+                            const br = (lvl as any).bitrate as number | undefined;
+                            if (h && Number.isFinite(h)) return { id: idx, label: `${h}p` };
+                            if (br && Number.isFinite(br)) return { id: idx, label: `${Math.round(br / 1000)} kbps` };
+                            return { id: idx, label: `Level ${idx + 1}` };
+                        });
+                        setInternalQualityLevels(levelLabels);
+                        console.log('[VideoPlayer] Quality levels:', levelLabels);
+
+                        // Default to highest level (best height/bitrate)
+                        let bestLevel = 0;
+                        let bestScore = -1;
+                        for (let i = 0; i < hls.levels.length; i++) {
+                            const lvl: any = hls.levels[i];
+                            const height = typeof lvl?.height === 'number' ? lvl.height : 0;
+                            const bitrate = typeof lvl?.bitrate === 'number' ? lvl.bitrate : 0;
+                            const score = (height || 0) * 1_000_000 + (bitrate || 0);
+                            if (score > bestScore) {
+                                bestScore = score;
+                                bestLevel = i;
+                            }
                         }
+                        setCurrentQuality(bestLevel);
+                        hls.currentLevel = bestLevel;
+                    } else {
+                        console.log('[VideoPlayer] Only', hls.levels?.length || 0, 'level(s) detected, no quality switching');
+                        setUseInternalQuality(false);
+                        setInternalQualityLevels([]);
                     }
-                    setCurrentQuality(bestLevel);
-                    hls.currentLevel = bestLevel;
-                } else {
-                    setUseInternalQuality(false);
-                    setInternalQualityLevels([]);
-                }
-            });
+                });
 
-            hls.on(Hls.Events.ERROR, (event, data) => {
-                const decodeUpstreamUrl = (maybeProxyUrl: string | undefined) => {
-                    if (!maybeProxyUrl) return null;
-                    try {
-                        const u = new URL(maybeProxyUrl, window.location.origin);
-                        const inner = u.searchParams.get('url');
-                        return inner ? decodeURIComponent(inner) : null;
-                    } catch {
-                        return null;
+                hls.on(Hls.Events.ERROR, (event, data) => {
+                    const decodeUpstreamUrl = (maybeProxyUrl: string | undefined) => {
+                        if (!maybeProxyUrl) return null;
+                        try {
+                            const u = new URL(maybeProxyUrl, window.location.origin);
+                            const inner = u.searchParams.get('url');
+                            return inner ? decodeURIComponent(inner) : null;
+                        } catch {
+                            return null;
+                        }
+                    };
+
+                    const baseSnapshot = {
+                        fatal: Boolean((data as any)?.fatal),
+                        type: (data as any)?.type,
+                        details: (data as any)?.details,
+                        url: (data as any)?.url,
+                        fragUrl: (data as any)?.frag?.url,
+                        fragUpstreamUrl: decodeUpstreamUrl((data as any)?.frag?.url),
+                        error: (data as any)?.error?.message ?? String((data as any)?.error ?? ''),
+                        reason: (data as any)?.reason,
+                        responseCode: (data as any)?.response?.code,
+                        fragSn: (data as any)?.frag?.sn,
+                        level: (data as any)?.level,
+                        parent: (data as any)?.parent,
+                    };
+
+                    // Always print a JSON snapshot too, because DevTools sometimes renders objects as `{}`.
+                    // (e.g. when properties are non-enumerable/getters or get stripped in some builds)
+                    if ((data as any)?.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                        console.error('HLS Media Error', baseSnapshot);
+                        console.error('HLS Media Error JSON', JSON.stringify(baseSnapshot));
+                    } else if ((data as any)?.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                        console.error('HLS Network Error', baseSnapshot);
+                        console.error('HLS Network Error JSON', JSON.stringify(baseSnapshot));
+                    } else {
+                        console.error('HLS Error', baseSnapshot);
+                        console.error('HLS Error JSON', JSON.stringify(baseSnapshot));
                     }
-                };
 
-                const baseSnapshot = {
-                    fatal: Boolean((data as any)?.fatal),
-                    type: (data as any)?.type,
-                    details: (data as any)?.details,
-                    url: (data as any)?.url,
-                    fragUrl: (data as any)?.frag?.url,
-                    fragUpstreamUrl: decodeUpstreamUrl((data as any)?.frag?.url),
-                    error: (data as any)?.error?.message ?? String((data as any)?.error ?? ''),
-                    reason: (data as any)?.reason,
-                    responseCode: (data as any)?.response?.code,
-                    fragSn: (data as any)?.frag?.sn,
-                    level: (data as any)?.level,
-                    parent: (data as any)?.parent,
-                };
+                    if ((data as any)?.fatal) {
+                        switch (data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                // Avoid tight retry loops
+                                setTimeout(() => hls.startLoad(), 500);
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                // Media errors can happen due to codec/buffer issues. Try a few controlled recoveries.
+                                hlsMediaErrorCountRef.current += 1;
+                                const now = Date.now();
+                                const msSinceLast = now - hlsLastRecoveryAtRef.current;
 
-                // Always print a JSON snapshot too, because DevTools sometimes renders objects as `{}`.
-                // (e.g. when properties are non-enumerable/getters or get stripped in some builds)
-                if ((data as any)?.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                    console.error('HLS Media Error', baseSnapshot);
-                    console.error('HLS Media Error JSON', JSON.stringify(baseSnapshot));
-                } else if ((data as any)?.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                    console.error('HLS Network Error', baseSnapshot);
-                    console.error('HLS Network Error JSON', JSON.stringify(baseSnapshot));
-                } else {
-                    console.error('HLS Error', baseSnapshot);
-                    console.error('HLS Error JSON', JSON.stringify(baseSnapshot));
-                }
+                                console.error('HLS Media Error recovery', {
+                                    count: hlsMediaErrorCountRef.current,
+                                    msSinceLast,
+                                });
 
-                if ((data as any)?.fatal) {
-                    switch (data.type) {
-                        case Hls.ErrorTypes.NETWORK_ERROR:
-                            // Avoid tight retry loops
-                            setTimeout(() => hls.startLoad(), 500);
-                            break;
-                        case Hls.ErrorTypes.MEDIA_ERROR:
-                            // Media errors can happen due to codec/buffer issues. Try a few controlled recoveries.
-                            hlsMediaErrorCountRef.current += 1;
-                            const now = Date.now();
-                            const msSinceLast = now - hlsLastRecoveryAtRef.current;
+                                // Rate-limit recoveries
+                                if (msSinceLast < 1500) return;
+                                hlsLastRecoveryAtRef.current = now;
 
-                            console.error('HLS Media Error recovery', {
-                                count: hlsMediaErrorCountRef.current,
-                                msSinceLast,
-                            });
-
-                            // Rate-limit recoveries
-                            if (msSinceLast < 1500) return;
-                            hlsLastRecoveryAtRef.current = now;
-
-                            if (hlsMediaErrorCountRef.current <= 2) {
-                                hls.recoverMediaError();
-                            } else if (hlsMediaErrorCountRef.current <= 4) {
-                                // Sometimes swapping codecs helps for some streams.
-                                try { hls.swapAudioCodec(); } catch { }
-                                hls.recoverMediaError();
-                            } else {
+                                if (hlsMediaErrorCountRef.current <= 2) {
+                                    hls.recoverMediaError();
+                                } else if (hlsMediaErrorCountRef.current <= 4) {
+                                    // Sometimes swapping codecs helps for some streams.
+                                    try { hls.swapAudioCodec(); } catch { }
+                                    hls.recoverMediaError();
+                                } else {
+                                    hls.destroy();
+                                    setError(showOpenDownload
+                                        ? 'HLS Media Error. Try switching quality or using Open / Download.'
+                                        : 'HLS Media Error. Try switching quality or changing audio.');
+                                }
+                                break;
+                            default:
                                 hls.destroy();
                                 setError(showOpenDownload
-                                    ? 'HLS Media Error. Try switching quality or using Open / Download.'
-                                    : 'HLS Media Error. Try switching quality or changing audio.');
-                            }
-                            break;
-                        default:
-                            hls.destroy();
-                            setError(showOpenDownload
-                                ? 'HLS Fatal Error. Try external player (Open / Download).'
-                                : 'HLS Fatal Error. This stream may be unsupported in-browser.');
-                            break;
+                                    ? 'HLS Fatal Error. Try external player (Open / Download).'
+                                    : 'HLS Fatal Error. This stream may be unsupported in-browser.');
+                                break;
+                        }
                     }
-                }
-            });
+                });
 
-            return () => {
-                hls.destroy();
-                hlsRef.current = null;
-                video.removeEventListener('error', onError);
-            };
-        } else {
-            // Direct playback (MP4, MKV, etc.)
-            // Note: browser support for MKV is limited.
-            if (hlsRef.current) {
-                hlsRef.current.destroy();
-                hlsRef.current = null;
+                return () => {
+                    hls.destroy();
+                    hlsRef.current = null;
+                    video.removeEventListener('error', onError);
+                    if (cleanupBlobUrl) {
+                        URL.revokeObjectURL(cleanupBlobUrl);
+                    }
+                };
+            } else {
+                // Direct playback (MP4, MKV, etc.)
+                // Note: browser support for MKV is limited.
+                if (hlsRef.current) {
+                    hlsRef.current.destroy();
+                    hlsRef.current = null;
+                }
+                video.src = processedUrl;
+                return () => {
+                    video.removeEventListener('error', onError);
+                    if (cleanupBlobUrl) {
+                        URL.revokeObjectURL(cleanupBlobUrl);
+                    }
+                };
             }
-            video.src = url;
-            return () => {
-                video.removeEventListener('error', onError);
-            };
-        }
+        };
+
+        setupVideo();
     }, [url, isMounted]);
 
     const changeStream = async (res?: number, audio?: number | string) => {
@@ -590,6 +659,7 @@ export default function VideoPlayer({
                             {subtitles.length > 0 && (
                                 <select
                                     className="select select--overlay"
+                                    value={currentSubtitle}
                                     onChange={(e) => {
                                         const video = videoRef.current;
                                         if (!video) return;
@@ -601,6 +671,8 @@ export default function VideoPlayer({
                                         }
 
                                         const idx = Number(e.target.value);
+                                        setCurrentSubtitle(idx);
+
                                         if (idx >= 0 && subtitles[idx]) {
                                             const target = subtitles[idx];
 

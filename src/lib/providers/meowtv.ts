@@ -99,8 +99,8 @@ export const MeowTvProvider: Provider = {
 
         try {
             const res = await fetch(url);
-                const payload = await res.text();
-                const decryptedJson = decryptData(payload, key);
+            const payload = await res.text();
+            const decryptedJson = decryptData(payload, key);
             if (!decryptedJson) {
                 console.warn('[MeowTV] search decrypt failed', {
                     query,
@@ -120,7 +120,7 @@ export const MeowTvProvider: Provider = {
         } catch { return []; }
     },
 
-    async fetchDetails(id: string): Promise<MovieDetails | null> {
+    async fetchDetails(id: string, includeEpisodes?: boolean): Promise<MovieDetails | null> {
         const { key } = await getSecurityKey();
         if (!key) return null;
         const url = `${MAIN_URL}/film-api/v1.9.9/movie?channel=IndiaA&clientType=1&lang=en-US&movieId=${id}&packageName=com.external.castle`;

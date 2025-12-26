@@ -86,18 +86,18 @@ export const MeowToonProvider: Provider = {
                     fetchJson<KartoonsListResponse<any[]>>(`${MAIN_URL}/api/popularity/movies?limit=15&period=day`)
                 ]);
 
-            const mapToItem = (item: any, type: 'series' | 'movie'): ContentItem => ({
-                id: `${type}-${item?.slug ?? item?.id}`,
-                title: item?.title ?? '',
-                coverImage: normalizeImage(item?.image),
-                type
-            });
+                const mapToItem = (item: any, type: 'series' | 'movie'): ContentItem => ({
+                    id: `${type}-${item?.slug ?? item?.id}`,
+                    title: item?.title ?? '',
+                    coverImage: normalizeImage(item?.image),
+                    type
+                });
 
                 kartoRows = [
-                { name: 'Popular Shows', contents: (popShowsData.data || []).map((i: any) => mapToItem(i, 'series')) },
-                { name: 'Popular Movies', contents: (popMoviesData.data || []).map((i: any) => mapToItem(i, 'movie')) },
-                { name: 'Shows', contents: (showsData.data || []).map((i: any) => mapToItem(i, 'series')) },
-                { name: 'Movies', contents: (moviesData.data || []).map((i: any) => mapToItem(i, 'movie')) }
+                    { name: 'Popular Shows', contents: (popShowsData.data || []).map((i: any) => mapToItem(i, 'series')) },
+                    { name: 'Popular Movies', contents: (popMoviesData.data || []).map((i: any) => mapToItem(i, 'movie')) },
+                    { name: 'Shows', contents: (showsData.data || []).map((i: any) => mapToItem(i, 'series')) },
+                    { name: 'Movies', contents: (moviesData.data || []).map((i: any) => mapToItem(i, 'movie')) }
                 ].filter(r => r.contents.length > 0);
             } catch (kartErr) {
                 // If Kartoons endpoints fail or time out, still return Xon rows.
@@ -148,18 +148,18 @@ export const MeowToonProvider: Provider = {
         }
 
         try {
-                const xon = await searchXon(query);
-                results.push(
-                    ...xon.map((i) => {
-                        const mappedType: 'movie' | 'series' = (i.type as XonContentType) === 'movie' ? 'movie' : 'series';
-                        return {
-                            id: `xon:${i.id}`,
-                            title: i.title,
-                            coverImage: normalizeImage(i.poster || i.backdrop),
-                            type: mappedType,
-                        } satisfies ContentItem;
-                    })
-                );
+            const xon = await searchXon(query);
+            results.push(
+                ...xon.map((i) => {
+                    const mappedType: 'movie' | 'series' = (i.type as XonContentType) === 'movie' ? 'movie' : 'series';
+                    return {
+                        id: `xon:${i.id}`,
+                        title: i.title,
+                        coverImage: normalizeImage(i.poster || i.backdrop),
+                        type: mappedType,
+                    } satisfies ContentItem;
+                })
+            );
         } catch (e) {
             console.error('[MeowToon] xon search failed:', e);
         }
@@ -174,7 +174,7 @@ export const MeowToonProvider: Provider = {
         });
     },
 
-    async fetchDetails(id: string): Promise<MovieDetails | null> {
+    async fetchDetails(id: string, includeEpisodes?: boolean): Promise<MovieDetails | null> {
         if (id.startsWith('xon:')) {
             try {
                 const details = await fetchXonDetails(id.slice('xon:'.length));
@@ -373,10 +373,16 @@ export const MeowToonProvider: Provider = {
                 const encoded = link?.url;
                 if (!encoded) continue;
 
+                // The decrypt service returns an HLS master playlist as text.
+                // We'll use a special prefix so the player knows to fetch it client-side
+                // and create a blob URL. This avoids any server bandwidth usage.
+                const decryptUrl = toLocalKartoonsStreamUrl(String(encoded));
+
                 return {
-                    // Single-step stream URL: Python decrypts the Kartoons blob AND returns the final playlist.
-                    videoUrl: toLocalKartoonsStreamUrl(String(encoded)),
+                    // Use blob: prefix to signal client-side handling
+                    videoUrl: `blob:${decryptUrl}`,
                     headers: {},
+                    // Empty qualities array signals the player to use internal HLS quality switching
                     qualities: []
                 };
             }

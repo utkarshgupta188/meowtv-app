@@ -261,6 +261,7 @@ main {
   max-width: 720px;
   display: -webkit-box;
   -webkit-line-clamp: 3;
+  line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -557,7 +558,7 @@ select:focus-visible {
   box-shadow: var(--shadow-soft);
 }
 
- .nav-shell {
+.nav-shell {
   max-width: 1440px;
   margin: 0 auto;
   padding: 14px 24px;
@@ -1056,6 +1057,7 @@ select:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   .card,
   .episode-item {
     transition: none;
@@ -1085,4 +1087,102 @@ select:focus-visible {
 .select option {
   background: var(--surface);
   color: var(--text);
+}
+
+/* Mobile Gesture Overlay */
+.gesture-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  /* Above video, below HUD controls (z-50) */
+  display: flex;
+  pointer-events: none;
+  /* Let clicks pass through generally, but children enable pointer-events */
+}
+
+.gesture-zone {
+  flex: 1;
+  height: 100%;
+  pointer-events: auto;
+  /* Capture touches */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  /* overflow: hidden; */
+}
+
+.gesture-zone--left {
+  /* Identify for debugging if needed */
+  display: flex;
+}
+
+.gesture-zone--middle {
+  flex: 0.8;
+  /* Smaller middle zone allows easier access to center play button/controls if needed */
+  pointer-events: auto;
+  /* Allow single-tap anywhere */
+}
+
+.gesture-zone--right {
+  /* Identify for debugging */
+  display: flex;
+}
+
+.gesture-feedback {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  padding: 16px 24px;
+  border-radius: 50%;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  animation: ripple-fade 0.6s ease-out forwards;
+  pointer-events: none;
+}
+
+.gesture-feedback--left {
+  left: 15%;
+  border-top-right-radius: 100px;
+  border-bottom-right-radius: 100px;
+  border-radius: 50%;
+}
+
+.gesture-feedback--right {
+  right: 15%;
+  border-top-left-radius: 100px;
+  border-bottom-left-radius: 100px;
+  border-radius: 50%;
+}
+
+.gesture-icon {
+  font-size: 24px;
+  margin-bottom: 2px;
+}
+
+.gesture-text {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@keyframes ripple-fade {
+  0% {
+    opacity: 0;
+    transform: translateY(-50%) scale(0.8);
+  }
+
+  20% {
+    opacity: 1;
+    transform: translateY(-50%) scale(1.1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-50%) scale(1.5);
+  }
 }

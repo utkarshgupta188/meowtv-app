@@ -57,7 +57,8 @@ export default function VideoPlayer({
 
     // Double-tap seek state
     const lastTapTimeRef = useRef<number>(0);
-    const lastTapSideRef = useRef<'left' | 'right' | null>(null);
+    const lastTapSideRef = useRef<'left' | 'right' | 'middle' | null>(null);
+    const singleTapTimerRef = useRef<NodeJS.Timeout | null>(null);
 
     const scoreQualityLabel = (label: string): number => {
         const s = String(label || '').toLowerCase();
@@ -578,62 +579,55 @@ export default function VideoPlayer({
         return () => window.removeEventListener('keydown', handleKeyPress);
     }, [videoRef]);
 
-    // Double-tap seek for mobile
-    useEffect(() => {
-        const video = videoRef.current;
-        if (!video) return;
+    // Double-tap seek state
+    const [showForwardAnimation, setShowForwardAnimation] = useState(false);
+    const [showRewindAnimation, setShowRewindAnimation] = useState(false);
 
-        const handleDoubleTap = (e: TouchEvent) => {
-            if (!video) return;
+    const handleGesture = (side: 'left' | 'right' | 'middle') => {
+        const now = Date.now();
+        const timeSinceLastTap = now - lastTapTimeRef.current;
 
-            const now = Date.now();
-            const timeSinceLastTap = now - lastTapTimeRef.current;
+        // Clear any pending single tap
+        if (singleTapTimerRef.current) {
+            clearTimeout(singleTapTimerRef.current);
+            singleTapTimerRef.current = null;
+        }
 
-            // Double-tap detection (within 300ms)
-            if (timeSinceLastTap < 300) {
-                const touch = e.touches[0] || e.changedTouches[0];
-                const rect = video.getBoundingClientRect();
-                const x = touch.clientX - rect.left;
-                const width = rect.width;
-
-                // Determine which side was tapped
-                const side = x < width / 2 ? 'left' : 'right';
-
-                // Only seek if tapping the same side twice
-                if (lastTapSideRef.current === side) {
-                    e.preventDefault();
-
-                    if (side === 'left') {
-                        // Seek backward 10 seconds
-                        video.currentTime = Math.max(0, video.currentTime - 10);
-                    } else {
-                        // Seek forward 10 seconds
-                        video.currentTime = Math.min(video.duration, video.currentTime + 10);
-                    }
-
-                    // Reset to prevent triple-tap
-                    lastTapTimeRef.current = 0;
-                    lastTapSideRef.current = null;
+        if (side !== 'middle' && timeSinceLastTap < 300 && lastTapSideRef.current === side) {
+            // Double tap detected (only on sides)
+            const video = videoRef.current;
+            if (video) {
+                if (side === 'left') {
+                    video.currentTime = Math.max(0, video.currentTime - 10);
+                    setShowRewindAnimation(true);
+                    setTimeout(() => setShowRewindAnimation(false), 600);
                 } else {
-                    lastTapSideRef.current = side;
-                    lastTapTimeRef.current = now;
+                    video.currentTime = Math.min(video.duration, video.currentTime + 10);
+                    setShowForwardAnimation(true);
+                    setTimeout(() => setShowForwardAnimation(false), 600);
                 }
-            } else {
-                // First tap
-                const touch = e.touches[0] || e.changedTouches[0];
-                const rect = video.getBoundingClientRect();
-                const x = touch.clientX - rect.left;
-                const width = rect.width;
-                const side = x < width / 2 ? 'left' : 'right';
-
-                lastTapSideRef.current = side;
-                lastTapTimeRef.current = now;
             }
-        };
+            lastTapTimeRef.current = 0;
+            lastTapSideRef.current = null;
+        } else {
+            // First tap or Middle tap
+            lastTapTimeRef.current = now;
+            lastTapSideRef.current = side;
 
-        video.addEventListener('touchend', handleDoubleTap);
-        return () => video.removeEventListener('touchend', handleDoubleTap);
-    }, []);
+            singleTapTimerRef.current = setTimeout(() => {
+                const video = videoRef.current;
+                if (video) {
+                    if (video.paused) {
+                        video.play();
+                    } else {
+                        video.pause();
+                    }
+                }
+                lastTapTimeRef.current = 0;
+                lastTapSideRef.current = null;
+            }, 300);
+        }
+    };
 
     const skipTime = (seconds: number) => {
         const video = videoRef.current;
@@ -668,7 +662,38 @@ export default function VideoPlayer({
                         label={sub.title}
                     />
                 ))}
+
             </video>
+
+            {/* Mobile Gesture Overlay */}
+            <div className="gesture-overlay">
+                <div
+                    className="gesture-zone gesture-zone--left"
+                    onClick={() => handleGesture('left')}
+                >
+                    {showRewindAnimation && (
+                        <div className="gesture-feedback gesture-feedback--left">
+                            <span className="gesture-icon">↺</span>
+                            <span className="gesture-text">10s</span>
+                        </div>
+                    )}
+                </div>
+                <div
+                    className="gesture-zone gesture-zone--middle"
+                    onClick={() => handleGesture('middle')}
+                />
+                <div
+                    className="gesture-zone gesture-zone--right"
+                    onClick={() => handleGesture('right')}
+                >
+                    {showForwardAnimation && (
+                        <div className="gesture-feedback gesture-feedback--right">
+                            <span className="gesture-icon">↻</span>
+                            <span className="gesture-text">10s</span>
+                        </div>
+                    )}
+                </div>
+            </div>
 
             {/* Top HUD (modern control bar) */}
             <div className="player-hud">

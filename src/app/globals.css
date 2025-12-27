@@ -1094,8 +1094,8 @@ select:focus-visible {
 .gesture-overlay {
   position: absolute;
   inset: 0;
-  bottom: 64px;
-  /* Leave space for player controls (approx 48-60px) */
+  bottom: 5rem;
+  /* Leave abundant space for player controls (approx 80px) */
   z-index: 2;
   /* Above video, below HUD controls (z-50) */
   display: flex;
@@ -1112,7 +1112,8 @@ select:focus-visible {
   align-items: center;
   justify-content: center;
   position: relative;
-  /* overflow: hidden; */
+  background-color: rgba(255, 0, 0, 0.2);
+  /* DEBUG: Visible touch zones */
 }
 
 .gesture-zone--left {

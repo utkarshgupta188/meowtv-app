@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Hls from 'hls.js';
 import { getStreamUrl } from '@/app/actions';
 import type { Quality } from '@/lib/providers/types';
@@ -60,6 +61,9 @@ export default function VideoPlayer({
     const lastTapSideRef = useRef<'left' | 'right' | 'middle' | null>(null);
     const singleTapTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+    // Fullscreen support: Portal target
+    const [plyrContainer, setPlyrContainer] = useState<HTMLElement | null>(null);
+
     const scoreQualityLabel = (label: string): number => {
         const s = String(label || '').toLowerCase();
         const pMatch = s.match(/(\d{3,4})\s*p/);
@@ -118,9 +122,14 @@ export default function VideoPlayer({
                     tooltips: { controls: true, seek: true },
                     keyboard: { focused: false, global: false },
                     captions: { active: false, update: true },
+                    fullscreen: { enabled: true, fallback: true, iosNative: false },
                 });
-
                 plyrRef.current = player;
+                // Fallback to DOM query to ensure we get the real wrapper
+                setTimeout(() => {
+                    const domTarget = document.querySelector('.plyr') as HTMLElement;
+                    setPlyrContainer(domTarget || player.elements.container);
+                }, 100);
             } catch (e) {
                 console.error('[VideoPlayer] Plyr failed to load', e);
             }
@@ -665,35 +674,41 @@ export default function VideoPlayer({
 
             </video>
 
-            {/* Mobile Gesture Overlay */}
-            <div className="gesture-overlay">
-                <div
-                    className="gesture-zone gesture-zone--left"
-                    onClick={() => handleGesture('left')}
-                >
-                    {showRewindAnimation && (
-                        <div className="gesture-feedback gesture-feedback--left">
-                            <span className="gesture-icon">↺</span>
-                            <span className="gesture-text">10s</span>
+            {/* Mobile Gesture Overlay - Portaled into Plyr */}
+            {/* Mobile Gesture Overlay - Portaled into Plyr */}
+            {plyrContainer && (() => {
+                return createPortal(
+                    <div className="gesture-overlay">
+                        <div
+                            className="gesture-zone gesture-zone--left"
+                            onClick={() => handleGesture('left')}
+                        >
+                            {showRewindAnimation && (
+                                <div className="gesture-feedback gesture-feedback--left">
+                                    <span className="gesture-icon">↺</span>
+                                    <span className="gesture-text">10s</span>
+                                </div>
+                            )}
                         </div>
-                    )}
-                </div>
-                <div
-                    className="gesture-zone gesture-zone--middle"
-                    onClick={() => handleGesture('middle')}
-                />
-                <div
-                    className="gesture-zone gesture-zone--right"
-                    onClick={() => handleGesture('right')}
-                >
-                    {showForwardAnimation && (
-                        <div className="gesture-feedback gesture-feedback--right">
-                            <span className="gesture-icon">↻</span>
-                            <span className="gesture-text">10s</span>
+                        <div
+                            className="gesture-zone gesture-zone--middle"
+                            onClick={() => handleGesture('middle')}
+                        />
+                        <div
+                            className="gesture-zone gesture-zone--right"
+                            onClick={() => handleGesture('right')}
+                        >
+                            {showForwardAnimation && (
+                                <div className="gesture-feedback gesture-feedback--right">
+                                    <span className="gesture-icon">↻</span>
+                                    <span className="gesture-text">10s</span>
+                                </div>
+                            )}
                         </div>
-                    )}
-                </div>
-            </div>
+                    </div>,
+                    plyrContainer
+                );
+            })()}
 
             {/* Top HUD (modern control bar) */}
             <div className="player-hud">

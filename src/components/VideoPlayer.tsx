@@ -55,6 +55,10 @@ export default function VideoPlayer({
     const [isMounted, setIsMounted] = useState(false);
     const [currentSubtitle, setCurrentSubtitle] = useState<number>(-1);
 
+    // Double-tap seek state
+    const lastTapTimeRef = useRef<number>(0);
+    const lastTapSideRef = useRef<'left' | 'right' | null>(null);
+
     const scoreQualityLabel = (label: string): number => {
         const s = String(label || '').toLowerCase();
         const pMatch = s.match(/(\d{3,4})\s*p/);
@@ -573,6 +577,63 @@ export default function VideoPlayer({
         window.addEventListener('keydown', handleKeyPress);
         return () => window.removeEventListener('keydown', handleKeyPress);
     }, [videoRef]);
+
+    // Double-tap seek for mobile
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+
+        const handleDoubleTap = (e: TouchEvent) => {
+            if (!video) return;
+
+            const now = Date.now();
+            const timeSinceLastTap = now - lastTapTimeRef.current;
+
+            // Double-tap detection (within 300ms)
+            if (timeSinceLastTap < 300) {
+                const touch = e.touches[0] || e.changedTouches[0];
+                const rect = video.getBoundingClientRect();
+                const x = touch.clientX - rect.left;
+                const width = rect.width;
+
+                // Determine which side was tapped
+                const side = x < width / 2 ? 'left' : 'right';
+
+                // Only seek if tapping the same side twice
+                if (lastTapSideRef.current === side) {
+                    e.preventDefault();
+
+                    if (side === 'left') {
+                        // Seek backward 10 seconds
+                        video.currentTime = Math.max(0, video.currentTime - 10);
+                    } else {
+                        // Seek forward 10 seconds
+                        video.currentTime = Math.min(video.duration, video.currentTime + 10);
+                    }
+
+                    // Reset to prevent triple-tap
+                    lastTapTimeRef.current = 0;
+                    lastTapSideRef.current = null;
+                } else {
+                    lastTapSideRef.current = side;
+                    lastTapTimeRef.current = now;
+                }
+            } else {
+                // First tap
+                const touch = e.touches[0] || e.changedTouches[0];
+                const rect = video.getBoundingClientRect();
+                const x = touch.clientX - rect.left;
+                const width = rect.width;
+                const side = x < width / 2 ? 'left' : 'right';
+
+                lastTapSideRef.current = side;
+                lastTapTimeRef.current = now;
+            }
+        };
+
+        video.addEventListener('touchend', handleDoubleTap);
+        return () => video.removeEventListener('touchend', handleDoubleTap);
+    }, []);
 
     const skipTime = (seconds: number) => {
         const video = videoRef.current;

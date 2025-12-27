@@ -1081,6 +1081,7 @@ select:focus-visible {
 
 .plyr__controls {
   background: linear-gradient(to top, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0));
+  z-index: 10 !important;
 }
 
 /* Best-effort styling for the dropdown list (browser support varies). */
@@ -1093,7 +1094,9 @@ select:focus-visible {
 .gesture-overlay {
   position: absolute;
   inset: 0;
-  z-index: 20;
+  bottom: 64px;
+  /* Leave space for player controls (approx 48-60px) */
+  z-index: 2;
   /* Above video, below HUD controls (z-50) */
   display: flex;
   pointer-events: none;

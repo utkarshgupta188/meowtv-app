@@ -1112,7 +1112,6 @@ select:focus-visible {
   align-items: center;
   justify-content: center;
   position: relative;
-  background-color: rgba(255, 0, 0, 0.2);
   /* DEBUG: Visible touch zones */
 }
 

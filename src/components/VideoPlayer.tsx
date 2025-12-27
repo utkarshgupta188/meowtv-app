@@ -674,8 +674,7 @@ export default function VideoPlayer({
 
             </video>
 
-            {/* Mobile Gesture Overlay - Portaled into Plyr */}
-            {/* Mobile Gesture Overlay - Portaled into Plyr */}
+
             {plyrContainer && (() => {
                 return createPortal(
                     <div className="gesture-overlay">

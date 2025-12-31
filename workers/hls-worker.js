@@ -11,6 +11,18 @@
 
 export default {
     async fetch(request, env, ctx) {
+        // Handle CORS preflight requests
+        if (request.method === 'OPTIONS') {
+            return new Response(null, {
+                headers: {
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type, Range, Authorization',
+                    'Access-Control-Max-Age': '86400',
+                },
+            });
+        }
+
         const urlObj = new URL(request.url);
         const params = urlObj.searchParams;
 

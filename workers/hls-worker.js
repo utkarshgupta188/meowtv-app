@@ -261,11 +261,11 @@ async function handleHlsRequest(request, params) {
 
 async function handleProxyRequest(request, params) {
     const url = params.get('url');
-    // ... handling similar to your simple proxy route ...
     if (!url) return new Response('Missing url', { status: 400 });
 
     const referer = params.get('referer');
     const cookie = params.get('cookie');
+    const range = request.headers.get('range');
 
     try {
         const headers = {
@@ -273,17 +273,24 @@ async function handleProxyRequest(request, params) {
         };
         if (referer) headers['Referer'] = referer;
         if (cookie) headers['Cookie'] = cookie;
+        if (range) headers['Range'] = range;
 
         const response = await fetch(url, { headers });
+
         const newHeaders = new Headers(response.headers);
         newHeaders.set('Access-Control-Allow-Origin', '*');
 
+        // Ensure connection stays alive for streaming if possible, though Workers handles this
+        if (!newHeaders.has('Accept-Ranges')) {
+            newHeaders.set('Accept-Ranges', 'bytes');
+        }
+
         return new Response(response.body, {
-            status: response.status,
+            status: response.status, // Should be 206 if range was sent and supported
             headers: newHeaders
         });
     } catch (e) {
-        return new Response('Error', { status: 500 });
+        return new Response('Error: ' + e.message, { status: 500 });
     }
 }
 

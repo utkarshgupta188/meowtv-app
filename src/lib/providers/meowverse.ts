@@ -30,10 +30,9 @@ async function bypass(mainUrl: string): Promise<string> {
         console.log('[CNC Verse] Starting bypass...');
         // Keep POSTing until we get success response
         while (retries < maxRetries) {
-            // Use Worker for Auth to ensure IP matches the video playback IP (Cloudflare)
-            // This prevents "Only Valid Users Allowed" error due to IP mismatch.
-            const proxyUrl = getSimpleProxyUrl(`${mainUrl}/tv/p.php`);
-            const res = await fetch(proxyUrl, {
+            // We are on Vercel Server. Vercel IP matches the Proxy IP (also Vercel).
+            // No need to proxy to self.
+            const res = await fetch(`${mainUrl}/tv/p.php`, {
                 method: 'POST',
                 headers: HEADERS
             });
@@ -357,6 +356,7 @@ export const MeowVerseProvider: Provider = {
     },
 
     async fetchStreamUrl(movieId: string, episodeId: string, audioLang?: string): Promise<VideoResponse | null> {
+        console.log('[CNC Verse] fetchStreamUrl (VERSION: UA_FIX_APPLIED)');
         try {
             const cookieValue = await bypass(MAIN_URL);
             const time = Math.floor(Date.now() / 1000);

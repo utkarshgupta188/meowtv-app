@@ -1,4 +1,5 @@
-export const PROXY_WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL || 'https://you-need-to-set-NEXT_PUBLIC_WORKER_URL-in-env-local';
+// Switched back to internal Vercel API routes as per user request
+export const PROXY_WORKER_URL = '';
 
 export function getHlsProxyUrl(targetUrl: string, params: Record<string, string> = {}): string {
     const searchParams = new URLSearchParams();
@@ -6,7 +7,8 @@ export function getHlsProxyUrl(targetUrl: string, params: Record<string, string>
     for (const [key, value] of Object.entries(params)) {
         if (value) searchParams.set(key, value);
     }
-    return `${PROXY_WORKER_URL}/api/hls?${searchParams.toString()}`;
+    // Use local API route
+    return `/api/hls?${searchParams.toString()}`;
 }
 
 export function getSimpleProxyUrl(targetUrl: string, params: Record<string, string> = {}): string {
@@ -15,5 +17,6 @@ export function getSimpleProxyUrl(targetUrl: string, params: Record<string, stri
     for (const [key, value] of Object.entries(params)) {
         if (value) searchParams.set(key, value);
     }
-    return `${PROXY_WORKER_URL}/api/proxy?${searchParams.toString()}`;
+    // Use local API route
+    return `/api/proxy?${searchParams.toString()}`;
 }

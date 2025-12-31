@@ -37,9 +37,11 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Missing url parameter' }, { status: 400 });
     }
 
+    const uaParam = request.nextUrl.searchParams.get('ua');
+
     try {
         const headers: HeadersInit = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': uaParam || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': referer,
             'Cookie': cookie
         };

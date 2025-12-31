@@ -46,9 +46,10 @@ async function handleHlsRequest(request, params) {
     const kindParam = (params.get('kind') || '').toLowerCase(); // 'playlist' | 'seg'
     const proxySegments = params.get('proxy_segments') !== 'false';
     const rangeHeader = request.headers.get('range');
+    const uaParam = params.get('ua');
 
     const headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': uaParam || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Referer': referer,
         'Cookie': cookie
     };
@@ -317,11 +318,18 @@ async function handleProxyRequest(request, params) {
 
     try {
         const headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': request.headers.get('user-agent') || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         };
         if (referer) headers['Referer'] = referer;
         if (cookie) headers['Cookie'] = cookie;
         if (range) headers['Range'] = range;
+
+        // Forward critical headers for Auth/POST requests
+        const allowedHeaders = ['content-type', 'x-requested-with', 'origin', 'accept'];
+        for (const h of allowedHeaders) {
+            const v = request.headers.get(h);
+            if (v) headers[h] = v;
+        }
 
         const response = await fetch(url, { headers });
 

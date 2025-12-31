@@ -1,6 +1,6 @@
 import { Provider, HomePageRow, ContentItem, MovieDetails, Episode, VideoResponse } from './types';
 import * as cheerio from 'cheerio';
-import { getHlsProxyUrl } from '../proxy-config';
+import { getHlsProxyUrl, getSimpleProxyUrl } from '../proxy-config';
 
 const MAIN_URL = 'https://net20.cc';
 const NEW_URL = 'https://net51.cc';
@@ -30,7 +30,10 @@ async function bypass(mainUrl: string): Promise<string> {
         console.log('[CNC Verse] Starting bypass...');
         // Keep POSTing until we get success response
         while (retries < maxRetries) {
-            const res = await fetch(`${mainUrl}/tv/p.php`, {
+            // Use Worker for Auth to ensure IP matches the video playback IP (Cloudflare)
+            // This prevents "Only Valid Users Allowed" error due to IP mismatch.
+            const proxyUrl = getSimpleProxyUrl(`${mainUrl}/tv/p.php`);
+            const res = await fetch(proxyUrl, {
                 method: 'POST',
                 headers: HEADERS
             });
@@ -59,7 +62,7 @@ async function bypass(mainUrl: string): Promise<string> {
 
         throw new Error('Bypass failed after max retries');
     } catch (e) {
-        console.error('[CNC Verse] Bypass error:', e);
+        console.error('[CNC Verse] Bypass error DETAILS:', e);
         cachedCookie = null;
         throw e;
     }
@@ -534,7 +537,11 @@ export const MeowVerseProvider: Provider = {
                     const m3u8Url = sourceFile.startsWith('http')
                         ? sourceFile
                         : `${playlistBaseUrl}${sourceFile.replace('/tv/', '/')}`;
-                    const proxyUrl = getHlsProxyUrl(m3u8Url, { referer: playlistReferer, cookie: streamCookies });
+                    const proxyUrl = getHlsProxyUrl(m3u8Url, {
+                        referer: playlistReferer,
+                        cookie: streamCookies,
+                        ua: HEADERS['User-Agent']
+                    });
 
                     return {
                         videoUrl: proxyUrl,
@@ -573,7 +580,11 @@ export const MeowVerseProvider: Provider = {
                                 return {
                                     language,
                                     label,
-                                    url: getHlsProxyUrl(subUrl, { referer: playlistReferer, cookie: streamCookies })
+                                    url: getHlsProxyUrl(subUrl, {
+                                        referer: playlistReferer,
+                                        cookie: streamCookies,
+                                        ua: HEADERS['User-Agent']
+                                    })
                                 };
                             })
                             .filter((s: any) => Boolean(s.url)),
@@ -582,7 +593,11 @@ export const MeowVerseProvider: Provider = {
                             url: (() => {
                                 const file = String(s?.file ?? '');
                                 const abs = file.startsWith('http') ? file : `${playlistBaseUrl}${file.replace('/tv/', '/')}`;
-                                return getHlsProxyUrl(abs, { referer: playlistReferer, cookie: streamCookies });
+                                return getHlsProxyUrl(abs, {
+                                    referer: playlistReferer,
+                                    cookie: streamCookies,
+                                    ua: HEADERS['User-Agent']
+                                });
                             })()
                         })),
                         headers: {}
@@ -592,7 +607,7 @@ export const MeowVerseProvider: Provider = {
 
             return null;
         } catch (e) {
-            console.error('CNC Stream Error:', e);
+            console.error('CNC Stream Error DETAILS:', e);
             return null;
         }
     }

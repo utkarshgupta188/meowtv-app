@@ -1,5 +1,6 @@
 import { Provider, HomePageRow, ContentItem, MovieDetails, Episode, VideoResponse } from './types';
 import * as cheerio from 'cheerio';
+import { getHlsProxyUrl } from '../proxy-config';
 
 const MAIN_URL = 'https://net20.cc';
 const NEW_URL = 'https://net51.cc';
@@ -533,7 +534,7 @@ export const MeowVerseProvider: Provider = {
                     const m3u8Url = sourceFile.startsWith('http')
                         ? sourceFile
                         : `${playlistBaseUrl}${sourceFile.replace('/tv/', '/')}`;
-                    const proxyUrl = `/api/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(playlistReferer)}&cookie=${cookieParam}`;
+                    const proxyUrl = getHlsProxyUrl(m3u8Url, { referer: playlistReferer, cookie: streamCookies });
 
                     return {
                         videoUrl: proxyUrl,
@@ -572,7 +573,7 @@ export const MeowVerseProvider: Provider = {
                                 return {
                                     language,
                                     label,
-                                    url: `/api/hls?url=${encodeURIComponent(subUrl)}&referer=${encodeURIComponent(playlistReferer)}&cookie=${cookieParam}`
+                                    url: getHlsProxyUrl(subUrl, { referer: playlistReferer, cookie: streamCookies })
                                 };
                             })
                             .filter((s: any) => Boolean(s.url)),
@@ -581,7 +582,7 @@ export const MeowVerseProvider: Provider = {
                             url: (() => {
                                 const file = String(s?.file ?? '');
                                 const abs = file.startsWith('http') ? file : `${playlistBaseUrl}${file.replace('/tv/', '/')}`;
-                                return `/api/hls?url=${encodeURIComponent(abs)}&referer=${encodeURIComponent(playlistReferer)}&cookie=${cookieParam}`;
+                                return getHlsProxyUrl(abs, { referer: playlistReferer, cookie: streamCookies });
                             })()
                         })),
                         headers: {}

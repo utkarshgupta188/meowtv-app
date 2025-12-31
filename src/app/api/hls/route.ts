@@ -102,7 +102,8 @@ export async function GET(request: NextRequest) {
         if (playlistText !== null) {
             let text = playlistText;
 
-            const baseProxySuffix = `&referer=${encodeURIComponent(referer)}&cookie=${encodeURIComponent(cookie)}${decryptParam ? `&decrypt=${decryptParam}` : ''}`;
+            const proxySegments = request.nextUrl.searchParams.get('proxy_segments') !== 'false';
+            const baseProxySuffix = `&referer=${encodeURIComponent(referer)}&cookie=${encodeURIComponent(cookie)}${decryptParam ? `&decrypt=${decryptParam}` : ''}${!proxySegments ? '&proxy_segments=false' : ''}`;
 
             const resolveUrl = (maybeRelative: string) => {
                 const ref = maybeRelative.trim();
@@ -132,6 +133,12 @@ export async function GET(request: NextRequest) {
                 // If it's already our proxy, don't wrap again.
                 if (absoluteUrl.startsWith('/api/hls?') || absoluteUrl.startsWith('/api/proxy?')) return absoluteUrl;
                 const k = kind ?? inferKind(absoluteUrl);
+
+                // If we're not proxying segments and this IS a segment, return the absolute URL directly
+                if (!proxySegments && k === 'seg') {
+                    return absoluteUrl;
+                }
+
                 return `/api/hls?url=${encodeURIComponent(absoluteUrl)}&kind=${k}${baseProxySuffix}`;
             };
 

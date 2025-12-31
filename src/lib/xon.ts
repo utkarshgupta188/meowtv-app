@@ -470,6 +470,8 @@ export async function fetchDetails(id: string): Promise<Details | null> {
 	return null;
 }
 
+import { getHlsProxyUrl, getSimpleProxyUrl } from './proxy-config';
+
 function toPlayableProxyUrl(sourceUrl: string): string {
 	const u = formatMediaUrl(sourceUrl.trim());
 	// If it's an HLS playlist, route through /api/hls for rewriting.
@@ -484,9 +486,10 @@ function toPlayableProxyUrl(sourceUrl: string): string {
 		}
 	}
 	if (looksLikeHls) {
-		return `/api/hls?url=${encodeURIComponent(u)}&referer=${encodeURIComponent(mainUrl)}&kind=playlist`;
+		// Xon/Archive.org supports CORS, so we can bypass proxy for segments to save bandwidth/requests
+		return getHlsProxyUrl(u, { referer: mainUrl, kind: 'playlist', proxy_segments: 'false' });
 	}
-	return `/api/proxy?url=${encodeURIComponent(u)}&referer=${encodeURIComponent(mainUrl)}`;
+	return getSimpleProxyUrl(u, { referer: mainUrl });
 }
 
 export async function fetchStream(id: string): Promise<StreamResponse | null> {

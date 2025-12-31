@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export async function GET(request: NextRequest) {
+async function handleRequest(request: NextRequest) {
     const url = request.nextUrl.searchParams.get('url');
     const referer = request.nextUrl.searchParams.get('referer');
     const cookie = request.nextUrl.searchParams.get('cookie');
+    const uaParam = request.nextUrl.searchParams.get('ua');
 
     if (!url) {
         return NextResponse.json({ error: 'Missing url parameter' }, { status: 400 });
@@ -11,7 +12,7 @@ export async function GET(request: NextRequest) {
 
     try {
         const headers: HeadersInit = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': uaParam || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         };
 
         const range = request.headers.get('range');
@@ -20,22 +21,34 @@ export async function GET(request: NextRequest) {
         if (referer) headers['Referer'] = referer;
         if (cookie) headers['Cookie'] = cookie;
 
-        const response = await fetch(url, { headers });
-
-        if (!response.ok) {
-            return NextResponse.json({ error: 'Failed to fetch' }, { status: response.status });
+        // Forward critical headers for Auth/POST requests
+        const allowedHeaders = ['content-type', 'x-requested-with', 'accept', 'origin'];
+        for (const h of allowedHeaders) {
+            const v = request.headers.get(h);
+            if (v) headers[h] = v;
         }
 
-        if (!response.body) {
-            return NextResponse.json({ error: 'No response body' }, { status: 500 });
+        const method = request.method;
+        const body = method === 'POST' ? request.body : undefined;
+
+        // @ts-ignore - duplex is required for streaming bodies in node fetch but typings might miss it
+        const fetchOptions: RequestInit = { headers, method, body };
+        if (body) {
+            // @ts-ignore
+            fetchOptions.duplex = 'half';
         }
+
+        const response = await fetch(url, fetchOptions);
 
         const contentType = response.headers.get('content-type') || 'application/octet-stream';
 
         const responseHeaders = new Headers();
         responseHeaders.set('Content-Type', contentType);
         responseHeaders.set('Access-Control-Allow-Origin', '*');
-        responseHeaders.set('Cache-Control', 'public, max-age=3600');
+
+        // Forward critical auth headers (Set-Cookie)
+        const setCookie = response.headers.get('set-cookie');
+        if (setCookie) responseHeaders.set('Set-Cookie', setCookie);
 
         // Forward critical streaming headers
         const contentLength = response.headers.get('content-length');
@@ -56,4 +69,12 @@ export async function GET(request: NextRequest) {
         console.error('Proxy error:', error);
         return NextResponse.json({ error: 'Proxy failed' }, { status: 500 });
     }
+}
+
+export async function GET(request: NextRequest) {
+    return handleRequest(request);
+}
+
+export async function POST(request: NextRequest) {
+    return handleRequest(request);
 }

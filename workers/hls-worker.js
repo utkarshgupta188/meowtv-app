@@ -92,9 +92,12 @@ async function handleHlsRequest(request, params) {
         const response = await fetch(url, { headers });
 
         if (!response.ok) {
-            return new Response(JSON.stringify({ error: 'Failed to fetch' }), {
+            return new Response(JSON.stringify({ error: 'Failed to fetch', status: response.status }), {
                 status: response.status,
-                headers: { 'Content-Type': 'application/json' }
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                }
             });
         }
 
@@ -105,18 +108,48 @@ async function handleHlsRequest(request, params) {
         const forcePlaylist = kindParam === 'playlist';
 
         // ... Sniffing logic ...
+        // RELAXED CHECK: If it's small enough, read it as text to check for errors/playlist
+        // This bypasses strict Content-Type checks which might be missing/wrong
         const canSniffText = !forceSeg &&
             !isProbablySegmentUrl(url) &&
-            (contentLength === 0 || contentLength <= 2_000_000) &&
-            !/application\/octet-stream/i.test(contentType);
+            (contentLength === 0 || contentLength <= 2_000_000);
 
         let playlistText = null;
         if (forcePlaylist || url.toLowerCase().includes('.m3u8') || /mpegurl|m3u8/i.test(contentType)) {
             playlistText = await response.text();
+
+            // DEBUG: Check for error page disguised as playlist
+            if (!playlistText.includes('#EXTM3U')) {
+                return new Response(JSON.stringify({
+                    error: 'Invalid M3U8 content (upstream 200 OK)',
+                    contentType,
+                    preview: playlistText.slice(0, 500)
+                }), {
+                    status: 502,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    }
+                });
+            }
+
         } else if (canSniffText) {
             const probeText = await response.clone().text().catch(() => null);
-            if (probeText && /^#EXTM3U\b/m.test(probeText)) {
+            if (probeText && probeText.includes('#EXTM3U')) {
                 playlistText = probeText;
+            } else if (probeText && (probeText.includes('Error') || probeText.includes('Denied') || probeText.startsWith('<html'))) {
+                // It's an error page
+                return new Response(JSON.stringify({
+                    error: 'Upstream error detected',
+                    contentType,
+                    preview: probeText.slice(0, 500)
+                }), {
+                    status: 502,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    }
+                });
             }
         }
 
@@ -254,7 +287,10 @@ async function handleHlsRequest(request, params) {
     } catch (error) {
         return new Response(JSON.stringify({ error: 'Proxy failed: ' + error.message }), {
             status: 500,
-            headers: { 'Content-Type': 'application/json' }
+            headers: {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            }
         });
     }
 }

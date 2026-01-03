@@ -1,5 +1,5 @@
 import { fetchDetails, fetchStreamUrl } from '@/lib/api';
-import VideoPlayer from '@/components/VideoPlayer';
+import WatchClient from '@/components/WatchClient';
 import SeasonSwitcher from '@/components/SeasonSwitcher';
 import { cookies } from 'next/headers';
 
@@ -70,36 +70,35 @@ export default async function WatchPage({
     const selectedSeason = safeSeason ?? (currentEpisode?.season || seasonNumbers[0] || 1);
 
     let videoData = null;
+    let languageId: number | undefined;
 
     if (currentEpisode) {
-        try {
-            // Check if we should send languageId (Match Kotlin Logic)
-            // If ANY track has existIndividualVideo=true, we treat it as "Individual Video Mode"
-            // and MUST send languageId for the specific track we want to play.
-            let languageId: number | undefined;
-            if (currentEpisode.tracks && currentEpisode.tracks.length > 0) {
-                const tracksAny = currentEpisode.tracks as any[];
-                const hasIndividualVideo = tracksAny.some(t => t?.existIndividualVideo === true);
-                if (hasIndividualVideo) {
-                    const defaultTrack = tracksAny.find(t => t?.isDefault) || tracksAny[0];
-                    languageId = defaultTrack?.languageId;
-                } else {
-                    // Kotlin provider avoids languageId when existIndividualVideo is false.
-                    languageId = undefined;
-                }
+        // Calculate languageId (Common Logic)
+        if (currentEpisode.tracks && currentEpisode.tracks.length > 0) {
+            const tracksAny = currentEpisode.tracks as any[];
+            const hasIndividualVideo = tracksAny.some(t => t?.existIndividualVideo === true);
+            if (hasIndividualVideo) {
+                const defaultTrack = tracksAny.find(t => t?.isDefault) || tracksAny[0];
+                languageId = defaultTrack?.languageId;
             }
+        }
 
-            // Use sourceMovieId (Season ID) if available, otherwise main ID
-            const movieIdToUse = currentEpisode.sourceMovieId || details.id;
-            videoData = await fetchStreamUrl(movieIdToUse, currentEpisode.id, languageId);
-        } catch (e) {
-            console.error(e);
+        // Only fetch on server if NOT MeowVerse
+        if (providerName !== 'MeowVerse') {
+            try {
+                // Use sourceMovieId (Season ID) if available, otherwise main ID
+                const movieIdToUse = currentEpisode.sourceMovieId || details.id;
+                videoData = await fetchStreamUrl(movieIdToUse, currentEpisode.id, languageId);
+            } catch (e) {
+                console.error(e);
+            }
         }
     }
 
-    console.log('[WatchPage] videoData:', videoData);
+    console.log('[WatchPage] videoData:', videoData, 'Provider:', providerName);
 
     // Transform API data to Component Props
+    // Note: If videoData is null (MeowVerse), these will be empty, but WatchClient will populate/render them later.
     const subtitles = videoData?.subtitles?.map(s => ({
         title: s.label || "Unknown",
         url: s.url,
@@ -114,26 +113,44 @@ export default async function WatchPage({
         name: t.name
     })) || [];
 
+    // Helper for props
+    const initialData = videoData ? {
+        videoUrl: videoData.videoUrl,
+        subtitles: subtitles,
+        qualities: videoData.qualities,
+        audioTracks: audioTracks
+    } : null;
+
     return (
         <div className="container page-pad">
-            {videoData?.videoUrl ? (
-                <VideoPlayer
-                    key={currentEpisode?.id} // Force remount on episode change
-                    initialUrl={videoData.videoUrl}
-                    poster={currentEpisode?.coverImage || details.coverImage || details.backgroundImage}
-                    subtitles={subtitles}
-                    qualities={videoData.qualities}
-                    audioTracks={audioTracks}
-                    movieId={currentEpisode?.sourceMovieId || details.id}
-                    episodeId={currentEpisode!.id}
-                    languageId={videoData?.audioTracks?.[0]?.languageId ?? currentEpisode?.tracks?.[0]?.languageId}
-                    showOpenDownload={showOpenDownload}
-                />
-            ) : (
-                <div className="player-container player-shell player-empty center">
-                    <p className="muted">No stream available or error fetching stream.</p>
-                </div>
-            )}
+            {/* Pass everything to Client Wrapper */}
+            <div style={{ minHeight: '60vh' }}>
+                {currentEpisode ? (
+                    <script
+                        dangerouslySetInnerHTML={{
+                            __html: `console.log("Rendering WatchClient for ${providerName}");`
+                        }}
+                    />
+                ) : null}
+                {currentEpisode ? (
+                    /* We need to import WatchClient. Since page is Server Component, 
+                       we can just import it at top and render it. */
+                    <WatchClient
+                        initialVideoData={initialData}
+                        providerName={providerName || 'MeowTV'}
+                        movieId={currentEpisode.sourceMovieId || details.id}
+                        episodeId={currentEpisode.id}
+                        languageId={languageId}
+                        poster={currentEpisode?.coverImage || details.coverImage || details.backgroundImage}
+                        audioTracks={audioTracks}
+                        showOpenDownload={showOpenDownload}
+                    />
+                ) : (
+                    <div className="player-container player-shell player-empty center">
+                        <p className="muted">No episode selected.</p>
+                    </div>
+                )}
+            </div>
 
             <div className="details-container">
                 <h1 className="details-title">{details.title}</h1>

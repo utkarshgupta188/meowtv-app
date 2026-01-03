@@ -10,15 +10,55 @@ const HEADERS = {
     'X-Requested-With': 'XMLHttpRequest',
 };
 
-// Cached cookie (valid for ~15 hours)
-let cachedCookie: string | null = null;
-let cacheTimestamp: number = 0;
-const CACHE_DURATION = 54_000_000; // 15 hours in milliseconds
+// Cached cookies
+let cachedDirectCookie: string | null = null;
+let cachedProxyCookie: string | null = null;
+let cacheDirectTimestamp: number = 0;
+let cacheProxyTimestamp: number = 0;
+const CACHE_DURATION = 54_000_000; // 15 hours
 
-async function bypass(mainUrl: string): Promise<string> {
+// Helper to fetch via proxy if configured
+async function proxiedFetch(url: string, init?: RequestInit): Promise<Response> {
+    const { PROXY_WORKER_URL, getSimpleProxyUrl } = await import('../proxy-config');
+
+    // If no proxy worker, use direct fetch
+    if (!PROXY_WORKER_URL) {
+        return fetch(url, init);
+    }
+
+    // Extract headers that browsers might block if set manually
+    const headers = new Headers(init?.headers);
+    const cookie = headers.get('Cookie') || headers.get('cookie');
+    const referer = headers.get('Referer') || headers.get('referer');
+
+    // Explicitly set headers to null/empty in the fetch options to avoid "unsafe header" warnings
+    if (cookie) headers.delete('Cookie');
+    if (referer) headers.delete('Referer');
+
+    // Use proxy with explicit params
+    const proxyUrl = getSimpleProxyUrl(url, {
+        ...(init?.redirect ? { redirect: init.redirect } : {}),
+        ua: HEADERS['User-Agent'], // Force UA
+        ...(cookie ? { cookie } : {}),
+        ...(referer ? { referer } : {})
+    });
+
+    // Cloudflare Worker expects body to be passed as body to the proxy endpoint
+    return fetch(proxyUrl, {
+        ...init,
+        headers
+        // body is preserved in init
+    });
+}
+
+async function bypass(mainUrl: string, useProxy: boolean = false): Promise<string> {
+    // Select cache based on mode
+    const cachedCookie = useProxy ? cachedProxyCookie : cachedDirectCookie;
+    const timestamp = useProxy ? cacheProxyTimestamp : cacheDirectTimestamp;
+
     // Return cached cookie if valid
-    if (cachedCookie && Date.now() - cacheTimestamp < CACHE_DURATION) {
-        console.log('[CNC Verse] Using cached cookie');
+    if (cachedCookie && Date.now() - timestamp < CACHE_DURATION) {
+        // console.log(`[CNC Verse] Using cached ${useProxy ? 'proxy' : 'direct'} cookie`);
         return cachedCookie;
     }
 
@@ -27,12 +67,12 @@ async function bypass(mainUrl: string): Promise<string> {
         let retries = 0;
         const maxRetries = 10;
 
-        console.log('[CNC Verse] Starting bypass...');
+        console.log(`[CNC Verse] Starting bypass (${useProxy ? 'Proxy' : 'Direct'})...`);
         // Keep POSTing until we get success response
         while (retries < maxRetries) {
-            // We are on Vercel Server. Vercel IP matches the Proxy IP (also Vercel).
-            // No need to proxy to self.
-            const res = await fetch(`${mainUrl}/tv/p.php`, {
+            const fetchFn = useProxy ? proxiedFetch : fetch;
+
+            const res = await fetchFn(`${mainUrl}/tv/p.php`, {
                 method: 'POST',
                 headers: HEADERS
             });
@@ -42,27 +82,37 @@ async function bypass(mainUrl: string): Promise<string> {
             // Check if Cloudflare challenge passed
             if (verifyCheck.includes('"r":"n"')) {
                 // Extract t_hash_t cookie from response headers
-                const setCookie = res.headers.get('set-cookie');
+                const setCookie = useProxy
+                    ? (res.headers.get('x-proxied-set-cookie') || res.headers.get('set-cookie'))
+                    : res.headers.get('set-cookie');
+
                 if (setCookie) {
                     const match = setCookie.match(/t_hash_t=([^;]+)/);
                     if (match) {
-                        cachedCookie = match[1];
-                        cacheTimestamp = Date.now();
-                        console.log('[CNC Verse] Bypass successful! Cookie cached for 15 hours');
-                        return cachedCookie;
+                        const cookieVal = match[1];
+                        if (useProxy) {
+                            cachedProxyCookie = cookieVal;
+                            cacheProxyTimestamp = Date.now();
+                        } else {
+                            cachedDirectCookie = cookieVal;
+                            cacheDirectTimestamp = Date.now();
+                        }
+                        console.log(`[CNC Verse] Bypass successful! (${useProxy ? 'Proxy' : 'Direct'})`);
+                        return cookieVal;
                     }
                 }
             }
 
             retries++;
-            console.log(`[CNC Verse] Bypass attempt ${retries}/${maxRetries}...`);
+            // console.log(`[CNC Verse] Bypass attempt ${retries}/${maxRetries}...`);
             await new Promise(resolve => setTimeout(resolve, 500));
         }
 
         throw new Error('Bypass failed after max retries');
     } catch (e) {
         console.error('[CNC Verse] Bypass error DETAILS:', e);
-        cachedCookie = null;
+        if (useProxy) cachedProxyCookie = null;
+        else cachedDirectCookie = null;
         throw e;
     }
 }
@@ -156,7 +206,7 @@ export const MeowVerseProvider: Provider = {
         if (page > 1) return [];
 
         try {
-            const cookieValue = await bypass(MAIN_URL);
+            const cookieValue = await bypass(MAIN_URL, false); // Direct
             const headers = {
                 ...HEADERS,
                 'Cookie': `t_hash_t=${cookieValue}; ott=nf; hd=on; user_token=233123f803cf02184bf6c67e149cdd50`
@@ -196,7 +246,7 @@ export const MeowVerseProvider: Provider = {
 
     async search(query: string): Promise<ContentItem[]> {
         try {
-            const cookieValue = await bypass(MAIN_URL);
+            const cookieValue = await bypass(MAIN_URL, false); // Direct
             const time = Math.floor(Date.now() / 1000);
             const url = `${MAIN_URL}/search.php?s=${encodeURIComponent(query)}&t=${time}`;
 
@@ -223,7 +273,7 @@ export const MeowVerseProvider: Provider = {
 
     async fetchDetails(id: string, includeEpisodes: boolean = true): Promise<MovieDetails | null> {
         try {
-            const cookieValue = await bypass(MAIN_URL);
+            const cookieValue = await bypass(MAIN_URL, false); // Direct
             const time = Math.floor(Date.now() / 1000);
             const url = `${MAIN_URL}/post.php?id=${id}&t=${time}`;
 
@@ -358,7 +408,7 @@ export const MeowVerseProvider: Provider = {
     async fetchStreamUrl(movieId: string, episodeId: string, audioLang?: string): Promise<VideoResponse | null> {
         console.log('[CNC Verse] fetchStreamUrl (VERSION: UA_FIX_APPLIED)');
         try {
-            const cookieValue = await bypass(MAIN_URL);
+            const cookieValue = await bypass(MAIN_URL, true); // PROXIED
             const time = Math.floor(Date.now() / 1000);
             const audioParam = audioLang || '';
             console.log('[CNC Verse] Setting audio language:', audioParam || 'eng (default)');
@@ -397,7 +447,7 @@ export const MeowVerseProvider: Provider = {
             if (audioParam) {
                 // Step 1: POST to language.php (Net20)
                 try {
-                    const langRes = await fetch(`${MAIN_URL}/language.php`, {
+                    const langRes = await proxiedFetch(`${MAIN_URL}/language.php`, {
                         method: 'POST',
                         headers: {
                             ...HEADERS,
@@ -408,7 +458,7 @@ export const MeowVerseProvider: Provider = {
                         body: `lang=${audioParam}`
                     });
 
-                    streamCookies = mergeCookies(streamCookies, langRes.headers.get('set-cookie'));
+                    streamCookies = mergeCookies(streamCookies, langRes.headers.get('x-proxied-set-cookie') || langRes.headers.get('set-cookie'));
                 } catch (e) {
                     console.error('[CNC Verse] Language POST failed:', e);
                 }
@@ -420,7 +470,7 @@ export const MeowVerseProvider: Provider = {
             try {
                 console.log('[CNC Verse] Step 2: Getting transfer hash from play.php');
                 const playUrl = `${MAIN_URL}/play.php`;
-                const playPostRes = await fetch(playUrl, {
+                const playPostRes = await proxiedFetch(playUrl, {
                     method: 'POST',
                     headers: {
                         ...HEADERS,
@@ -432,7 +482,7 @@ export const MeowVerseProvider: Provider = {
                     body: `id=${episodeId}`
                 });
 
-                streamCookies = mergeCookies(streamCookies, playPostRes.headers.get('set-cookie'));
+                streamCookies = mergeCookies(streamCookies, playPostRes.headers.get('x-proxied-set-cookie') || playPostRes.headers.get('set-cookie'));
 
                 const playText = await playPostRes.text();
                 try {
@@ -454,7 +504,7 @@ export const MeowVerseProvider: Provider = {
                     console.log('[CNC Verse] Step 3: Transferring session to net51.cc');
                     const playGetUrl = `${NEW_URL}/play.php?id=${episodeId}${hashParams}`;
 
-                    const playGetRes = await fetch(playGetUrl, {
+                    const playGetRes = await proxiedFetch(playGetUrl, {
                         headers: {
                             ...HEADERS,
                             'Cookie': streamCookies,
@@ -464,7 +514,7 @@ export const MeowVerseProvider: Provider = {
                     });
 
                     console.log('[CNC Verse] Step 3 status:', playGetRes.status);
-                    streamCookies = mergeCookies(streamCookies, playGetRes.headers.get('set-cookie'));
+                    streamCookies = mergeCookies(streamCookies, playGetRes.headers.get('x-proxied-set-cookie') || playGetRes.headers.get('set-cookie'));
 
                 } catch (e) {
                     console.error('[CNC Verse] Session transfer failed:', e);
@@ -484,24 +534,38 @@ export const MeowVerseProvider: Provider = {
                 'Referer': `${NEW_URL}/home`
             };
 
-            let resText = await (await fetch(url, { headers })).text();
+            let resText = '';
+            try {
+                const playlistRes = await proxiedFetch(url, { headers });
+                resText = await playlistRes.text();
+                streamCookies = mergeCookies(streamCookies, playlistRes.headers.get('x-proxied-set-cookie') || playlistRes.headers.get('set-cookie'));
+            } catch (e) {
+                console.error('[CNC Verse] Playlist fetch error:', e);
+            }
+
             let playlistBaseUrl = NEW_URL;
             let playlistReferer = `${NEW_URL}/`;
 
             // Fallback: sometimes net51 returns plain text like "Video ID not found!".
             // Try net20 playlist endpoint as a backup.
-            if (/Video ID not found!/i.test(resText)) {
+            if (!resText || /Video ID not found!/i.test(resText)) {
                 console.warn('[CNC Verse] net51 playlist says Video ID not found; trying net20 fallback');
                 const url2 = `${MAIN_URL}/tv/playlist.php?id=${episodeId}&t=${audioParam}&tm=${time}`;
-                resText = await (await fetch(url2, {
-                    headers: {
-                        ...HEADERS,
-                        'Cookie': streamCookies,
-                        'Referer': refererNet20
-                    }
-                })).text();
-                playlistBaseUrl = MAIN_URL;
-                playlistReferer = `${MAIN_URL}/`;
+                try {
+                    const fallbackRes = await proxiedFetch(url2, {
+                        headers: {
+                            ...HEADERS,
+                            'Cookie': streamCookies,
+                            'Referer': refererNet20
+                        }
+                    });
+                    resText = await fallbackRes.text();
+                    streamCookies = mergeCookies(streamCookies, fallbackRes.headers.get('x-proxied-set-cookie') || fallbackRes.headers.get('set-cookie'));
+                    playlistBaseUrl = MAIN_URL;
+                    playlistReferer = `${MAIN_URL}/`;
+                } catch (e) {
+                    console.error('[CNC Verse] Fallback playlist fetch error:', e);
+                }
             }
 
             let playlist;

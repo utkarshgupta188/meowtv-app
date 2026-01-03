@@ -17,7 +17,7 @@ export default {
                 headers: {
                     'Access-Control-Allow-Origin': '*',
                     'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
-                    'Access-Control-Allow-Headers': 'Content-Type, Range, Authorization',
+                    'Access-Control-Allow-Headers': '*',
                     'Access-Control-Max-Age': '86400',
                 },
             });
@@ -49,7 +49,7 @@ async function handleHlsRequest(request, params) {
     const uaParam = params.get('ua');
 
     const headers = {
-        'User-Agent': uaParam || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': uaParam || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': referer,
         'Cookie': cookie
     };
@@ -136,7 +136,12 @@ async function handleHlsRequest(request, params) {
                 return new Response(JSON.stringify({
                     error: 'Invalid M3U8 content (upstream 200 OK)',
                     contentType,
-                    preview: playlistText.slice(0, 500)
+                    preview: playlistText.slice(0, 500),
+                    debug: {
+                        url: url,
+                        headersSent: headers,
+                        uaParam: uaParam
+                    }
                 }), {
                     status: 502,
                     headers: {
@@ -169,7 +174,7 @@ async function handleHlsRequest(request, params) {
         // Process Playlist
         if (playlistText !== null) {
             const workerOrigin = new URL(request.url).origin;
-            const baseProxySuffix = `&referer=${encodeURIComponent(referer)}&cookie=${encodeURIComponent(cookie)}${decryptParam ? `&decrypt=${decryptParam}` : ''}${!proxySegments ? '&proxy_segments=false' : ''}`;
+            const baseProxySuffix = `&referer=${encodeURIComponent(referer)}&cookie=${encodeURIComponent(cookie)}${uaParam ? `&ua=${encodeURIComponent(uaParam)}` : ''}${decryptParam ? `&decrypt=${decryptParam}` : ''}${!proxySegments ? '&proxy_segments=false' : ''}`;
 
             const resolveUrl = (maybeRelative) => {
                 const ref = maybeRelative.trim();
@@ -274,12 +279,17 @@ async function handleHlsRequest(request, params) {
             }
 
             const isVod = rewrittenM3u8.includes('#EXT-X-ENDLIST');
+            const resHeaders = {
+                'Content-Type': 'application/vnd.apple.mpegurl',
+                'Access-Control-Allow-Origin': '*',
+                'Cache-Control': isVod ? 'public, max-age=14400' : 'no-cache'
+            };
+
+            const setCookie = response.headers.get('set-cookie');
+            if (setCookie) resHeaders['X-Proxied-Set-Cookie'] = setCookie;
+
             return new Response(rewrittenM3u8, {
-                headers: {
-                    'Content-Type': 'application/vnd.apple.mpegurl',
-                    'Access-Control-Allow-Origin': '*',
-                    'Cache-Control': isVod ? 'public, max-age=14400' : 'no-cache'
-                }
+                headers: resHeaders
             });
         }
 
@@ -314,27 +324,63 @@ async function handleProxyRequest(request, params) {
 
     const referer = params.get('referer');
     const cookie = params.get('cookie');
+    const uaParam = params.get('ua'); // Fix: Get 'ua' param
     const range = request.headers.get('range');
 
     try {
         const headers = {
-            'User-Agent': request.headers.get('user-agent') || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            // Fix: Prioritize 'ua' param, fallback to header, then default
+            'User-Agent': uaParam || request.headers.get('user-agent') || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         };
         if (referer) headers['Referer'] = referer;
         if (cookie) headers['Cookie'] = cookie;
         if (range) headers['Range'] = range;
 
         // Forward critical headers for Auth/POST requests
-        const allowedHeaders = ['content-type', 'x-requested-with', 'origin', 'accept'];
+        // Added 'cookie' and 'referer' to allow passing them via headers instead of query params
+        const allowedHeaders = ['content-type', 'x-requested-with', 'accept', 'origin', 'authorization', 'cookie', 'referer'];
         for (const h of allowedHeaders) {
             const v = request.headers.get(h);
             if (v) headers[h] = v;
         }
 
-        const response = await fetch(url, { headers });
+        // Params override headers (backward compatibility)
+        if (referer) headers['Referer'] = referer;
+        if (cookie) headers['Cookie'] = cookie;
+
+        // Force Origin to match Referer (or target) to prevent "Vercel" origin blocking
+        try {
+            // Use header value if param is missing
+            const finalReferer = headers['Referer'];
+            if (finalReferer) {
+                headers['Origin'] = new URL(finalReferer).origin;
+            } else if (method === 'POST') {
+                headers['Origin'] = new URL(url).origin;
+            }
+        } catch (e) { }
+
+        // Forward Method and Body
+        const method = request.method;
+        const body = method !== 'GET' && method !== 'HEAD' ? request.body : undefined;
+        const redirectMode = params.get('redirect') || 'follow';
+
+        const response = await fetch(url, {
+            method,
+            headers,
+            body,
+            redirect: redirectMode,
+            cf: { cacheTtl: 0, cacheEverything: false } // Disable Cloudflare edge caching
+        });
 
         const newHeaders = new Headers(response.headers);
         newHeaders.set('Access-Control-Allow-Origin', '*');
+        newHeaders.set('Access-Control-Expose-Headers', 'X-Proxied-Set-Cookie');
+
+        // Forward Set-Cookie for auth proxying
+        const setCookie = response.headers.get('set-cookie');
+        if (setCookie) {
+            newHeaders.set('X-Proxied-Set-Cookie', setCookie);
+        }
 
         // Ensure connection stays alive for streaming if possible, though Workers handles this
         if (!newHeaders.has('Accept-Ranges')) {
@@ -342,11 +388,14 @@ async function handleProxyRequest(request, params) {
         }
 
         return new Response(response.body, {
-            status: response.status, // Should be 206 if range was sent and supported
+            status: response.status,
             headers: newHeaders
         });
     } catch (e) {
-        return new Response('Error: ' + e.message, { status: 500 });
+        return new Response('Error: ' + e.message, {
+            status: 500,
+            headers: { 'Access-Control-Allow-Origin': '*' }
+        });
     }
 }
 

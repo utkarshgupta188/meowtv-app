@@ -6,7 +6,7 @@ import Hls from 'hls.js';
 import { getStreamUrl } from '@/app/actions';
 import type { Quality } from '@/lib/providers/types';
 
-interface VideoPlayerProps {
+export interface VideoPlayerProps {
     initialUrl: string;
     poster?: string;
     subtitles?: { title: string; url: string; language: string }[];

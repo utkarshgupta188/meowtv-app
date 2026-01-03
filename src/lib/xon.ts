@@ -243,6 +243,7 @@ async function authenticateAndGetSettings(): Promise<void> {
 	} catch (e) {
 		// Fall back to hardcoded values.
 		console.warn('[xon] authenticate/settings failed; using defaults:', String(e));
+		console.error('Xon Auth Error Details:', e);
 	}
 }
 
@@ -486,8 +487,8 @@ function toPlayableProxyUrl(sourceUrl: string): string {
 		}
 	}
 	if (looksLikeHls) {
-		// Xon/Archive.org supports CORS, so we can bypass proxy for segments to save bandwidth/requests
-		return getHlsProxyUrl(u, { referer: mainUrl, kind: 'playlist', proxy_segments: 'false' });
+		// Reverting segment bypass to match localhost behavior for debugging
+		return getHlsProxyUrl(u, { referer: mainUrl, kind: 'playlist' });
 	}
 	return getSimpleProxyUrl(u, { referer: mainUrl });
 }

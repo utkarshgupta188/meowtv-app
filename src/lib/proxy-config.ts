@@ -1,5 +1,5 @@
-// Switched back to internal Vercel API routes as per user request
-export const PROXY_WORKER_URL = '';
+// Switched to Cloudflare Worker to avoid Vercel timeouts
+export const PROXY_WORKER_URL = process.env.NEXT_PUBLIC_CF_WORKER_URL || '';
 
 export function getHlsProxyUrl(targetUrl: string, params: Record<string, string> = {}): string {
     const searchParams = new URLSearchParams();
@@ -7,7 +7,18 @@ export function getHlsProxyUrl(targetUrl: string, params: Record<string, string>
     for (const [key, value] of Object.entries(params)) {
         if (value) searchParams.set(key, value);
     }
-    // Use local API route
+
+    console.log('[Proxy Config] Generating HLS URL:', {
+        targetUrl,
+        params,
+        workerUrl: PROXY_WORKER_URL,
+        generatedQuery: searchParams.toString()
+    });
+
+    // Use Cloudflare Worker if configured, otherwise fallback to local API
+    if (PROXY_WORKER_URL) {
+        return `${PROXY_WORKER_URL}/api/hls?${searchParams.toString()}`;
+    }
     return `/api/hls?${searchParams.toString()}`;
 }
 
@@ -17,6 +28,9 @@ export function getSimpleProxyUrl(targetUrl: string, params: Record<string, stri
     for (const [key, value] of Object.entries(params)) {
         if (value) searchParams.set(key, value);
     }
-    // Use local API route
+
+    if (PROXY_WORKER_URL) {
+        return `${PROXY_WORKER_URL}/api/proxy?${searchParams.toString()}`;
+    }
     return `/api/proxy?${searchParams.toString()}`;
 }

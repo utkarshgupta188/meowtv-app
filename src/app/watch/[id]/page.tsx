@@ -1,6 +1,7 @@
 import { fetchDetails, fetchStreamUrl } from '@/lib/api';
 import WatchClient from '@/components/WatchClient';
 import SeasonSwitcher from '@/components/SeasonSwitcher';
+import RecommendationsSection from '@/components/RecommendationsSection';
 import { cookies } from 'next/headers';
 
 export default async function WatchPage({
@@ -196,6 +197,11 @@ export default async function WatchPage({
                     </div>
                 )}
             </div>
+
+            {/* Recommendations Section */}
+            {details.relatedContent && details.relatedContent.length > 0 && (
+                <RecommendationsSection items={details.relatedContent} />
+            )}
         </div>
     );
 }

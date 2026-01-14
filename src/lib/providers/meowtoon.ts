@@ -282,7 +282,17 @@ export const MeowToonProvider: Provider = {
                     score: typeof data.rating === 'number' ? data.rating : undefined,
                     episodes,
                     seasons,
-                    tags: Array.isArray(data.tags) ? data.tags : undefined
+                    tags: Array.isArray(data.tags) ? data.tags : undefined,
+                    relatedContent: Array.isArray(json?.related)
+                        ? json.related.map((r: any) => ({
+                            id: `${r.type === 'movie' ? 'movie' : 'series'}-${r.slug ?? r._id ?? r.id}`,
+                            title: r.title ?? '',
+                            image: r.image ?? '',
+                            type: r.type === 'movie' ? 'movie' : 'show',
+                            rating: typeof r.rating === 'number' ? r.rating : undefined,
+                            year: r.startYear ? Number.parseInt(String(r.startYear), 10) : undefined
+                        }))
+                        : undefined
                 };
             }
 

@@ -19,6 +19,15 @@ export interface ContentItem {
     extra?: any;
 }
 
+export interface RelatedItem {
+    id: string;
+    title: string;
+    image: string;
+    type?: 'movie' | 'show';
+    rating?: number;
+    year?: number;
+}
+
 export interface MovieDetails {
     id: string;
     title: string;
@@ -32,6 +41,7 @@ export interface MovieDetails {
     // Extra metadata
     tags?: string[];
     actors?: { name: string; image?: string }[];
+    relatedContent?: RelatedItem[];
 }
 
 export interface Episode {

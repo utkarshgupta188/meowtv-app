@@ -396,7 +396,16 @@ export const MeowVerseProvider: Provider = {
                     id: s.id,
                     number: parseInt(s.id),
                     name: `Season ${s.id}`
-                }))
+                })),
+                relatedContent: Array.isArray(data.suggest)
+                    ? data.suggest.map((item: any) => ({
+                        id: item.id,
+                        title: item.t || item.title || '',
+                        image: `https://imgcdn.kim/poster/v/${item.id}.jpg`,
+                        type: 'show' as const,
+                        year: item.year ? parseInt(String(item.year)) : undefined
+                    }))
+                    : undefined
             };
 
         } catch (e) {

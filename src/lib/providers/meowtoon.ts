@@ -75,7 +75,10 @@ export const MeowToonProvider: Provider = {
         if (page > 1) return [];
 
         try {
-            const xonRows = await fetchXonHome().catch(() => []);
+            const xonRows = await fetchXonHome().catch((err) => {
+                console.warn('[MeowToon] XON fetch failed:', err?.message || err);
+                return [];
+            });
 
             let kartoRows: HomePageRow[] = [];
             try {
@@ -113,6 +116,7 @@ export const MeowToonProvider: Provider = {
                 })),
             }));
 
+            console.log('[MeowToon] Kartoons rows:', kartoRows.length, 'XON rows:', xonMapped.length);
             return [...kartoRows, ...xonMapped];
         } catch (e) {
             if (isAbortError(e)) return [];

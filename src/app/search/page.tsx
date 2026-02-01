@@ -1,13 +1,35 @@
-import { searchContent } from '@/lib/api';
-import Card from '@/components/Card';
+'use client';
 
-export default async function SearchPage({
-    searchParams,
-}: {
-    searchParams: Promise<{ q: string }>;
-}) {
-    const { q: query } = await searchParams;
-    const results = query ? await searchContent(query) : [];
+import { useEffect, useState, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
+import Card from '@/components/Card';
+import { searchContentClient } from '@/lib/api-client';
+import type { ContentItem } from '@/lib/providers/types';
+
+function SearchContent() {
+    const searchParams = useSearchParams();
+    const query = searchParams.get('q') || '';
+    const [results, setResults] = useState<ContentItem[]>([]);
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        if (!query) {
+            setResults([]);
+            return;
+        }
+
+        setLoading(true);
+        searchContentClient(query)
+            .then(data => {
+                setResults(data);
+            })
+            .catch(error => {
+                setResults([]);
+            })
+            .finally(() => {
+                setLoading(false);
+            });
+    }, [query]);
 
     return (
         <div className="container page-pad">
@@ -17,7 +39,9 @@ export default async function SearchPage({
 
             {!query && <p>Type something in the search bar to start.</p>}
 
-            {query && results.length === 0 && <p>No results found.</p>}
+            {loading && <p>Searching...</p>}
+
+            {query && !loading && results.length === 0 && <p>No results found.</p>}
 
             <div className="grid">
                 {results.map((item) => (
@@ -30,5 +54,13 @@ export default async function SearchPage({
                 ))}
             </div>
         </div>
+    );
+}
+
+export default function SearchPage() {
+    return (
+        <Suspense fallback={<div className="container page-pad">Loading search...</div>}>
+            <SearchContent />
+        </Suspense>
     );
 }

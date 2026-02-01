@@ -28,10 +28,11 @@ export default function SeasonSwitcher({
         const ep = firstEp ?? currentEpisodeId;
 
         const params = new URLSearchParams();
+        params.set('id', showId);
         params.set('season', String(season));
         if (ep) params.set('ep', ep);
 
-        router.push(`/watch/${showId}?${params.toString()}`);
+        router.push(`/watch/?${params.toString()}`);
     };
 
     if (options.length <= 1) return null;

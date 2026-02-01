@@ -6,7 +6,14 @@ import ProviderSwitcher from '@/components/ProviderSwitcher';
 
 export const metadata: Metadata = {
   title: 'MeowTV',
-  description: 'MeowTV Website',
+  description: 'Streaming Movies, TV Series, Cartoons & More',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/icon.png', type: 'image/png' },
+    ],
+    apple: '/apple-touch-icon.png',
+  },
 };
 
 export default function RootLayout({

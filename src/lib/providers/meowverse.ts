@@ -10,12 +10,54 @@ const HEADERS = {
     'X-Requested-With': 'XMLHttpRequest',
 };
 
-// Cached cookies
+// In browser environments, we MUST use proxy for all external requests (CORS)
+const IS_BROWSER = typeof window !== 'undefined';
+
+// Cached cookies (with persistence)
 let cachedDirectCookie: string | null = null;
 let cachedProxyCookie: string | null = null;
 let cacheDirectTimestamp: number = 0;
 let cacheProxyTimestamp: number = 0;
 const CACHE_DURATION = 54_000_000; // 15 hours
+
+// Initialize from LocalStorage if available (Client-side)
+if (typeof window !== 'undefined') {
+    try {
+        const savedDirect = localStorage.getItem('mv_direct_cookie');
+        const savedProxy = localStorage.getItem('mv_proxy_cookie');
+        if (savedDirect) {
+            const parsed = JSON.parse(savedDirect);
+            if (Date.now() - parsed.timestamp < CACHE_DURATION) {
+                cachedDirectCookie = parsed.cookie;
+                cacheDirectTimestamp = parsed.timestamp;
+            }
+        }
+        if (savedProxy) {
+            const parsed = JSON.parse(savedProxy);
+            if (Date.now() - parsed.timestamp < CACHE_DURATION) {
+                cachedProxyCookie = parsed.cookie;
+                cacheProxyTimestamp = parsed.timestamp;
+            }
+        }
+    } catch (e) { }
+}
+
+function saveCookie(type: 'direct' | 'proxy', cookie: string) {
+    const timestamp = Date.now();
+    if (type === 'direct') {
+        cachedDirectCookie = cookie;
+        cacheDirectTimestamp = timestamp;
+        if (typeof window !== 'undefined') {
+            localStorage.setItem('mv_direct_cookie', JSON.stringify({ cookie, timestamp }));
+        }
+    } else {
+        cachedProxyCookie = cookie;
+        cacheProxyTimestamp = timestamp;
+        if (typeof window !== 'undefined') {
+            localStorage.setItem('mv_proxy_cookie', JSON.stringify({ cookie, timestamp }));
+        }
+    }
+}
 
 // Helper to fetch via proxy if configured
 async function proxiedFetch(url: string, init?: RequestInit): Promise<Response> {
@@ -58,7 +100,6 @@ async function bypass(mainUrl: string, useProxy: boolean = false): Promise<strin
 
     // Return cached cookie if valid
     if (cachedCookie && Date.now() - timestamp < CACHE_DURATION) {
-        // console.log(`[CNC Verse] Using cached ${useProxy ? 'proxy' : 'direct'} cookie`);
         return cachedCookie;
     }
 
@@ -67,7 +108,6 @@ async function bypass(mainUrl: string, useProxy: boolean = false): Promise<strin
         let retries = 0;
         const maxRetries = 10;
 
-        console.log(`[CNC Verse] Starting bypass (${useProxy ? 'Proxy' : 'Direct'})...`);
         // Keep POSTing until we get success response
         while (retries < maxRetries) {
             const fetchFn = useProxy ? proxiedFetch : fetch;
@@ -90,29 +130,28 @@ async function bypass(mainUrl: string, useProxy: boolean = false): Promise<strin
                     const match = setCookie.match(/t_hash_t=([^;]+)/);
                     if (match) {
                         const cookieVal = match[1];
-                        if (useProxy) {
-                            cachedProxyCookie = cookieVal;
-                            cacheProxyTimestamp = Date.now();
-                        } else {
-                            cachedDirectCookie = cookieVal;
-                            cacheDirectTimestamp = Date.now();
-                        }
-                        console.log(`[CNC Verse] Bypass successful! (${useProxy ? 'Proxy' : 'Direct'})`);
+                        saveCookie(useProxy ? 'proxy' : 'direct', cookieVal);
+
                         return cookieVal;
                     }
                 }
             }
 
             retries++;
-            // console.log(`[CNC Verse] Bypass attempt ${retries}/${maxRetries}...`);
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Reduced delay for faster bypass
+            await new Promise(resolve => setTimeout(resolve, 200));
         }
 
         throw new Error('Bypass failed after max retries');
     } catch (e) {
-        console.error('[CNC Verse] Bypass error DETAILS:', e);
-        if (useProxy) cachedProxyCookie = null;
-        else cachedDirectCookie = null;
+        // Clear broken cache
+        if (useProxy) {
+            cachedProxyCookie = null;
+            if (typeof window !== 'undefined') localStorage.removeItem('mv_proxy_cookie');
+        } else {
+            cachedDirectCookie = null;
+            if (typeof window !== 'undefined') localStorage.removeItem('mv_direct_cookie');
+        }
         throw e;
     }
 }
@@ -130,54 +169,40 @@ async function fetchAllPages(
     while (hasMorePages) {
         try {
             const url = currentPage === 1 ? baseUrl : `${baseUrl}&page=${currentPage}`;
-            console.log(`[CNC Verse] Fetching page ${currentPage}: ${url}`);
 
-            const res = await fetch(url, { headers });
+            // Use proxiedFetch in browser to avoid CORS
+            const fetchFn = IS_BROWSER ? proxiedFetch : fetch;
+            const res = await fetchFn(url, { headers });
             const data = await res.json();
 
             if (data.episodes && data.episodes.length > 0) {
                 data.episodes.forEach((ep: any) => {
                     if (ep) allEpisodes.push(episodeProcessor(ep));
                 });
-                console.log(`[CNC Verse] Page ${currentPage}: Found ${data.episodes.length} episodes`);
-                console.log(`[CNC Verse] Pagination fields:`, {
-                    nextPageShow: data.nextPageShow,
-                    nextPage: data.nextPage,
-                    nextPageSeason: data.nextPageSeason,
-                    currentPage: currentPage
-                });
 
                 // Check nextPageShow field first - if it's 0, there are no more pages
                 if (data.nextPageShow === 0 || data.nextPageShow === '0') {
-                    console.log(`[CNC Verse] nextPageShow is 0, no more pages available`);
                     hasMorePages = false;
                 } else if (data.nextPage && currentPage >= data.nextPage) {
                     // If current page matches or exceeds nextPage, we're on the last page
-                    console.log(`[CNC Verse] currentPage (${currentPage}) >= nextPage (${data.nextPage}), stopping`);
                     hasMorePages = false;
                 } else if (data.episodes.length < 10) {
                     // If we got fewer than 10 episodes, this is the last page
-                    console.log(`[CNC Verse] Got ${data.episodes.length} episodes (less than 10), stopping pagination`);
                     hasMorePages = false;
                 } else if (data.nextPageShow === 1 || data.nextPageShow === '1') {
                     // Explicit indicator that there's a next page
-                    console.log(`[CNC Verse] nextPageShow is 1, fetching next page`);
                     hasMorePages = true;
                 } else if (data.nextPage && currentPage < data.nextPage) {
                     // If nextPage is greater than current page, continue
-                    console.log(`[CNC Verse] currentPage (${currentPage}) < nextPage (${data.nextPage}), continuing`);
                     hasMorePages = true;
                 } else if (currentPage === 1 && data.episodes.length === 10) {
                     // On first page with 10 episodes, try page 2
-                    console.log(`[CNC Verse] First page with 10 episodes, trying page 2`);
                     hasMorePages = true;
                 } else {
                     // Default: stop
-                    console.log(`[CNC Verse] No clear pagination indicator, stopping`);
                     hasMorePages = false;
                 }
             } else {
-                console.log(`[CNC Verse] Page ${currentPage}: No episodes found, stopping pagination`);
                 hasMorePages = false;
                 break;
             }
@@ -186,16 +211,13 @@ async function fetchAllPages(
 
             // Safety limit to prevent infinite loops
             if (currentPage > 100) {
-                console.warn('[CNC Verse] Reached page limit of 100, stopping pagination');
                 break;
             }
         } catch (err) {
-            console.error(`[CNC Verse] Error fetching page ${currentPage}:`, err);
             hasMorePages = false;
         }
     }
 
-    console.log(`[CNC Verse] Total episodes fetched: ${allEpisodes.length} across ${currentPage - 1} pages`);
     return allEpisodes;
 }
 
@@ -206,13 +228,16 @@ export const MeowVerseProvider: Provider = {
         if (page > 1) return [];
 
         try {
-            const cookieValue = await bypass(MAIN_URL, false); // Direct
+            // In browser, MUST use proxy for all external requests
+            const cookieValue = await bypass(MAIN_URL, IS_BROWSER);
             const headers = {
                 ...HEADERS,
                 'Cookie': `t_hash_t=${cookieValue}; ott=nf; hd=on; user_token=233123f803cf02184bf6c67e149cdd50`
             };
 
-            const res = await fetch(`${MAIN_URL}/home`, { headers });
+            // Use proxiedFetch in browser to avoid CORS
+            const fetchFn = IS_BROWSER ? proxiedFetch : fetch;
+            const res = await fetchFn(`${MAIN_URL}/home`, { headers });
             const html = await res.text();
             const $ = cheerio.load(html);
             const rows: HomePageRow[] = [];
@@ -239,14 +264,14 @@ export const MeowVerseProvider: Provider = {
 
             return rows;
         } catch (e) {
-            console.error('CNC Home Error:', e);
             return [];
         }
     },
 
     async search(query: string): Promise<ContentItem[]> {
         try {
-            const cookieValue = await bypass(MAIN_URL, false); // Direct
+            // In browser, MUST use proxy for all external requests
+            const cookieValue = await bypass(MAIN_URL, IS_BROWSER);
             const time = Math.floor(Date.now() / 1000);
             const url = `${MAIN_URL}/search.php?s=${encodeURIComponent(query)}&t=${time}`;
 
@@ -256,7 +281,9 @@ export const MeowVerseProvider: Provider = {
                 'Referer': `${MAIN_URL}/tv/home`
             };
 
-            const res = await fetch(url, { headers });
+            // Use proxiedFetch in browser to avoid CORS
+            const fetchFn = IS_BROWSER ? proxiedFetch : fetch;
+            const res = await fetchFn(url, { headers });
             const data = await res.json();
 
             return (data.searchResult || []).map((item: any) => ({
@@ -266,14 +293,14 @@ export const MeowVerseProvider: Provider = {
                 type: 'movie'
             }));
         } catch (e) {
-            console.error('CNC Search Error:', e);
             return [];
         }
     },
 
     async fetchDetails(id: string, includeEpisodes: boolean = true): Promise<MovieDetails | null> {
         try {
-            const cookieValue = await bypass(MAIN_URL, false); // Direct
+            // In browser, MUST use proxy for all external requests
+            const cookieValue = await bypass(MAIN_URL, IS_BROWSER);
             const time = Math.floor(Date.now() / 1000);
             const url = `${MAIN_URL}/post.php?id=${id}&t=${time}`;
 
@@ -283,7 +310,9 @@ export const MeowVerseProvider: Provider = {
                 'Referer': `${MAIN_URL}/tv/home`
             };
 
-            const res = await fetch(url, { headers });
+            // Use proxiedFetch in browser to avoid CORS
+            const fetchFn = IS_BROWSER ? proxiedFetch : fetch;
+            const res = await fetchFn(url, { headers });
             const data = await res.json();
 
             // CNCVerse exposes available audio languages via post.php:
@@ -363,7 +392,6 @@ export const MeowVerseProvider: Provider = {
                                 );
                                 episodes.push(...seasonEpisodes);
                             } catch (err) {
-                                console.error(`Failed to fetch season ${season.id}:`, err);
                             }
                         }
                     }
@@ -409,18 +437,15 @@ export const MeowVerseProvider: Provider = {
             };
 
         } catch (e) {
-            console.error('CNC Details Error:', e);
             return null;
         }
     },
 
     async fetchStreamUrl(movieId: string, episodeId: string, audioLang?: string): Promise<VideoResponse | null> {
-        console.log('[CNC Verse] fetchStreamUrl (VERSION: UA_FIX_APPLIED)');
         try {
             const cookieValue = await bypass(MAIN_URL, true); // PROXIED
             const time = Math.floor(Date.now() / 1000);
             const audioParam = audioLang || '';
-            console.log('[CNC Verse] Setting audio language:', audioParam || 'eng (default)');
 
             // Helper to merge cookies robustly
             const mergeCookies = (oldCookies: string, newSetCookieHeader: string | null) => {
@@ -441,7 +466,6 @@ export const MeowVerseProvider: Provider = {
                     const [key, val] = mainPart.split('=');
                     if (key) {
                         cookieMap.set(key, val || '');
-                        console.log(`[CNC Verse] Cookie update: ${key}=${val}`);
                     }
                 });
 
@@ -469,7 +493,6 @@ export const MeowVerseProvider: Provider = {
 
                     streamCookies = mergeCookies(streamCookies, langRes.headers.get('x-proxied-set-cookie') || langRes.headers.get('set-cookie'));
                 } catch (e) {
-                    console.error('[CNC Verse] Language POST failed:', e);
                 }
             }
 
@@ -477,7 +500,6 @@ export const MeowVerseProvider: Provider = {
             // Important: this appears to be required even for default audio (otherwise net51 playlist may reply "Video ID not found!").
             let hashParams = '';
             try {
-                console.log('[CNC Verse] Step 2: Getting transfer hash from play.php');
                 const playUrl = `${MAIN_URL}/play.php`;
                 const playPostRes = await proxiedFetch(playUrl, {
                     method: 'POST',
@@ -496,21 +518,17 @@ export const MeowVerseProvider: Provider = {
                 const playText = await playPostRes.text();
                 try {
                     const playData = JSON.parse(playText);
-                    console.log('[CNC Verse] Play response:', playData);
                     if (playData && playData.h) {
                         hashParams = `&${playData.h}`;
                     }
                 } catch (e) {
-                    console.warn('[CNC Verse] Play response was not JSON');
                 }
             } catch (e) {
-                console.error('[CNC Verse] Play POST failed:', e);
             }
 
             // Step 3: GET play.php (Net51) with hash to set session
             if (hashParams) {
                 try {
-                    console.log('[CNC Verse] Step 3: Transferring session to net51.cc');
                     const playGetUrl = `${NEW_URL}/play.php?id=${episodeId}${hashParams}`;
 
                     const playGetRes = await proxiedFetch(playGetUrl, {
@@ -522,20 +540,15 @@ export const MeowVerseProvider: Provider = {
                         redirect: 'manual'
                     });
 
-                    console.log('[CNC Verse] Step 3 status:', playGetRes.status);
                     streamCookies = mergeCookies(streamCookies, playGetRes.headers.get('x-proxied-set-cookie') || playGetRes.headers.get('set-cookie'));
 
                 } catch (e) {
-                    console.error('[CNC Verse] Session transfer failed:', e);
                 }
             } else {
-                console.warn('[CNC Verse] No transfer hash; continuing anyway');
             }
 
             // Step 4: Fetch playlist from net51.cc
             const url = `${NEW_URL}/tv/playlist.php?id=${episodeId}&t=${audioParam}&tm=${time}`;
-            console.log('[CNC Verse] Step 4: Fetching playlist:', url);
-            console.log('[CNC Verse] With Cookies:', streamCookies);
 
             const headers = {
                 ...HEADERS,
@@ -549,7 +562,6 @@ export const MeowVerseProvider: Provider = {
                 resText = await playlistRes.text();
                 streamCookies = mergeCookies(streamCookies, playlistRes.headers.get('x-proxied-set-cookie') || playlistRes.headers.get('set-cookie'));
             } catch (e) {
-                console.error('[CNC Verse] Playlist fetch error:', e);
             }
 
             let playlistBaseUrl = NEW_URL;
@@ -558,7 +570,6 @@ export const MeowVerseProvider: Provider = {
             // Fallback: sometimes net51 returns plain text like "Video ID not found!".
             // Try net20 playlist endpoint as a backup.
             if (!resText || /Video ID not found!/i.test(resText)) {
-                console.warn('[CNC Verse] net51 playlist says Video ID not found; trying net20 fallback');
                 const url2 = `${MAIN_URL}/tv/playlist.php?id=${episodeId}&t=${audioParam}&tm=${time}`;
                 try {
                     const fallbackRes = await proxiedFetch(url2, {
@@ -573,7 +584,6 @@ export const MeowVerseProvider: Provider = {
                     playlistBaseUrl = MAIN_URL;
                     playlistReferer = `${MAIN_URL}/`;
                 } catch (e) {
-                    console.error('[CNC Verse] Fallback playlist fetch error:', e);
                 }
             }
 
@@ -582,7 +592,6 @@ export const MeowVerseProvider: Provider = {
             try {
                 playlist = JSON.parse(resText);
             } catch (e) {
-                console.error('[CNC Verse] Failed to parse playlist JSON. Response start:', resText.substring(0, 500));
                 return null;
             }
 
@@ -593,7 +602,6 @@ export const MeowVerseProvider: Provider = {
                 const tracks: any[] = Array.isArray(item.tracks) ? item.tracks : [];
 
                 // Debug: Log all tracks
-                console.log('[CNC Verse] All tracks:', tracks);
 
                 // Audio languages should come from the stream itself (HLS #EXT-X-MEDIA TYPE=AUDIO).
                 // We deliberately do NOT return a premade list here.
@@ -680,7 +688,6 @@ export const MeowVerseProvider: Provider = {
 
             return null;
         } catch (e) {
-            console.error('CNC Stream Error DETAILS:', e);
             return null;
         }
     }

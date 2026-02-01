@@ -3,7 +3,10 @@
 	This module is server-side only (uses module-level cache).
 */
 
-import type { ContentItem, Details, EpisodeItem, HomeRow, StreamQuality, StreamResponse } from './xon-types.js';
+import type { ContentItem, Details, EpisodeItem, HomeRow, StreamQuality, StreamResponse } from './xon-types';
+import { getSimpleProxyUrl, getHlsProxyUrl } from './proxy-config';
+
+const IS_BROWSER = typeof window !== 'undefined';
 
 type FirebaseAuthResponse = {
 	kind?: string;
@@ -242,18 +245,35 @@ async function authenticateAndGetSettings(): Promise<void> {
 		if (typeof base === 'string' && base.length) mainUrl = base.replace(/\/+$/, '');
 	} catch (e) {
 		// Fall back to hardcoded values.
-		console.warn('[xon] authenticate/settings failed; using defaults:', String(e));
-		console.error('Xon Auth Error Details:', e);
 	}
 }
 
 async function fetchJson<T>(url: string, headers?: Record<string, string>): Promise<T> {
-	const res = await fetch(url, { headers, cache: 'no-store' });
-	if (!res.ok) {
-		const body = await res.text().catch(() => '');
-		throw new Error(`HTTP ${res.status} for ${url}${body ? `: ${body.slice(0, 200)}` : ''}`);
+	let fetchUrl = url;
+	let fetchHeaders = headers;
+	
+	if (IS_BROWSER) {
+		// In browser, route through proxy worker with auth headers as query params
+		const params: Record<string, string> = {
+			referer: mainUrl,
+		};
+		if (headers?.api) params.api = headers.api;
+		if (headers?.caller) params.caller = headers.caller;
+		fetchUrl = getSimpleProxyUrl(url, params);
+		fetchHeaders = undefined; // Headers are passed as query params
 	}
-	return (await res.json()) as T;
+	
+	try {
+		const res = await fetch(fetchUrl, { headers: fetchHeaders, cache: 'no-store' });
+		if (!res.ok) {
+			const body = await res.text().catch(() => '');
+			throw new Error(`HTTP ${res.status} for ${url}${body ? `: ${body.slice(0, 200)}` : ''}`);
+		}
+		const data = (await res.json()) as T;
+		return data;
+	} catch (error) {
+		throw error;
+	}
 }
 
 export async function refreshCache(force: boolean = false): Promise<void> {
@@ -396,7 +416,9 @@ export async function fetchDetails(id: string): Promise<Details | null> {
 
 	const [kind, rawId] = String(id).split(':', 2);
 	const numId = Number.parseInt(rawId ?? '', 10);
-	if (!kind || !Number.isFinite(numId)) return null;
+	if (!kind || !Number.isFinite(numId)) {
+		return null;
+	}
 
 	if (kind === 'show') {
 		const show = cache.indexes.showsById.get(numId);
@@ -465,31 +487,55 @@ export async function fetchDetails(id: string): Promise<Details | null> {
 			poster: formatMediaUrl((ep.thumb || '').trim()),
 			backdrop: formatMediaUrl((ep.cover || ep.thumb || '').trim()),
 			description: `${ep.des ?? ''}\n\nSeason: ${season?.name ?? 'Unknown'}\nLanguage: ${langName}`.trim(),
+			episodeNumber: ep.no,
+			seasonNumber: season?.no ?? 1,
+			showId: `show:${ep.show_id}`,
 		};
 	}
 
 	return null;
 }
 
-import { getHlsProxyUrl, getSimpleProxyUrl } from './proxy-config';
-
 function toPlayableProxyUrl(sourceUrl: string): string {
 	const u = formatMediaUrl(sourceUrl.trim());
-	// If it's an HLS playlist, route through /api/hls for rewriting.
-	// Some sources don't end with .m3u8 but still include m3u8 in the query.
-	let looksLikeHls = /\.m3u8(\?|$)/i.test(u);
+	
+	// Archive.org often has both MKV and MP4 versions
+	// MKV doesn't work in WebView2, so try to convert to MP4 if possible
+	let videoUrl = u;
+	if (u.includes('archive.org') && u.includes('.mkv')) {
+		// Try replacing .mkv with .mp4 - archive.org sometimes has both
+		const mp4Url = u.replace(/\.mkv(\?|$)/i, '.mp4$1');
+		console.log('[XON] MKV detected, will try MP4 version:', mp4Url);
+		// Note: We'll use the MP4 URL, but if it 404s, the browser will show an error
+		// This is better than silently playing audio-only MKV
+		videoUrl = mp4Url;
+	}
+	
+	// Check if it's a direct video file (MP4, MKV, WebM, etc.)
+	const isDirectVideo = /\.(mp4|mkv|webm|avi|mov)(\?|$)/i.test(videoUrl);
+	
+	// Archive.org videos are direct files, don't use HLS proxy for them
+	if (isDirectVideo || videoUrl.includes('archive.org')) {
+		// Direct video - use simple proxy to handle CORS
+		return getSimpleProxyUrl(videoUrl, { referer: mainUrl });
+	}
+	
+	// Check if it's an HLS playlist
+	let looksLikeHls = /\.m3u8(\?|$)/i.test(videoUrl);
 	if (!looksLikeHls) {
 		try {
-			const parsed = new URL(u);
+			const parsed = new URL(videoUrl);
 			looksLikeHls = /m3u8/i.test(`${parsed.pathname}${parsed.search}`);
 		} catch {
 			// ignore
 		}
 	}
+	
 	if (looksLikeHls) {
-		// Reverting segment bypass to match localhost behavior for debugging
 		return getHlsProxyUrl(u, { referer: mainUrl, kind: 'playlist' });
 	}
+	
+	// Fallback to simple proxy
 	return getSimpleProxyUrl(u, { referer: mainUrl });
 }
 
@@ -498,7 +544,9 @@ export async function fetchStream(id: string): Promise<StreamResponse | null> {
 
 	const [kind, rawId] = String(id).split(':', 2);
 	const numId = Number.parseInt(rawId ?? '', 10);
-	if (!kind || !Number.isFinite(numId)) return null;
+	if (!kind || !Number.isFinite(numId)) {
+		return null;
+	}
 
 	if (kind === 'episode') {
 		const e = cache.indexes.episodesById.get(numId);

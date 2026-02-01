@@ -11,9 +11,12 @@ export default function Card({ id, title, image }: CardProps) {
     const imageUrl = image || 'https://via.placeholder.com/300x450?text=No+Image';
     const safeTitle = title?.trim();
 
+    // For static builds, use query params instead of dynamic routes
+    const href = `/watch/?id=${encodeURIComponent(String(id))}`;
+
     return (
         <Link
-            href={`/watch/${encodeURIComponent(String(id))}`}
+            href={href}
             className="card"
             aria-label={safeTitle || 'Open'}
         >

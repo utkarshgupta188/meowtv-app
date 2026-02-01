@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Hls from 'hls.js';
-import { getStreamUrl } from '@/app/actions';
 import type { Quality } from '@/lib/providers/types';
 
 export interface VideoPlayerProps {
@@ -29,11 +28,6 @@ export default function VideoPlayer({
     languageId,
     showOpenDownload = true
 }: VideoPlayerProps) {
-    console.log('[VideoPlayer] Received:', {
-        subtitlesCount: subtitles.length,
-        qualitiesCount: qualities.length,
-        audioTracksCount: audioTracks.length
-    });
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const plyrRef = useRef<any>(null);
@@ -131,7 +125,6 @@ export default function VideoPlayer({
                     setPlyrContainer(domTarget || player.elements.container);
                 }, 100);
             } catch (e) {
-                console.error('[VideoPlayer] Plyr failed to load', e);
             }
         })();
 
@@ -194,15 +187,20 @@ export default function VideoPlayer({
         let cleanupBlobUrl: string | null = null;
 
         const setupVideo = async () => {
+            // Clear any previous error
+            setError(null);
+
             // Check if URL has blob: prefix (MeowToon playlists)
             if (url.startsWith('blob:')) {
                 const actualUrl = url.slice('blob:'.length);
-                console.log('[VideoPlayer] Fetching playlist client-side from:', actualUrl);
 
                 try {
+                    // kartoondecrypt service has CORS enabled, fetch directly
                     const response = await fetch(actualUrl);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
                     const playlistText = await response.text();
-                    console.log('[VideoPlayer] Playlist fetched, creating blob URL');
 
                     // Create a blob URL from the playlist
                     const blob = new Blob([playlistText], { type: 'application/vnd.apple.mpegurl' });
@@ -210,14 +208,17 @@ export default function VideoPlayer({
                     cleanupBlobUrl = blobUrl;
                     processedUrl = blobUrl;
                 } catch (err) {
-                    console.error('[VideoPlayer] Failed to fetch playlist:', err);
                     setError('Failed to load playlist');
                     return;
                 }
             }
 
             // Detect HLS even if wrapped in proxy
-            let isHls = processedUrl.includes('.m3u8') || processedUrl.includes('/api/hls?') || processedUrl.startsWith('blob:');
+            let isHls =
+                processedUrl.includes('.m3u8') ||
+                processedUrl.includes('/api/hls?') ||
+                processedUrl.startsWith('blob:') ||
+                processedUrl.includes('kartoondecrypt.onrender.com/kartoons');
             if (processedUrl.includes('/api/proxy') || processedUrl.includes('/api/hls?')) {
                 try {
                     const params = new URLSearchParams(processedUrl.split('?')[1]);
@@ -233,12 +234,14 @@ export default function VideoPlayer({
             const onError = (e: Event) => {
                 const target = e.target as HTMLVideoElement;
                 const err = target.error;
-                console.error("Video Error Details:", {
+                console.error('[VideoPlayer] Error event:', e);
+                console.error('[VideoPlayer] Error details:', {
                     code: err?.code,
                     message: err?.message,
-                    networkState: target.networkState,
-                    readyState: target.readyState,
-                    currentSrc: target.currentSrc
+                    MEDIA_ERR_ABORTED: err?.MEDIA_ERR_ABORTED,
+                    MEDIA_ERR_NETWORK: err?.MEDIA_ERR_NETWORK,
+                    MEDIA_ERR_DECODE: err?.MEDIA_ERR_DECODE,
+                    MEDIA_ERR_SRC_NOT_SUPPORTED: err?.MEDIA_ERR_SRC_NOT_SUPPORTED
                 });
                 setError(`Playback Error (${err?.code || 'Unknown'}). Format may not be supported.`);
             };
@@ -254,26 +257,33 @@ export default function VideoPlayer({
                     enableWorker: true,
                     // These are VOD-style streams; low-latency mode can increase buffer/codec edge cases.
                     lowLatencyMode: false,
-                    // Some sources are slow on the first fragment; avoid spurious timeouts.
-                    fragLoadingTimeOut: 20000,
-                    // Aggressive buffer settings for faster loading
-                    maxBufferLength: 60, // Buffer up to 60 seconds ahead
-                    maxMaxBufferLength: 120, // Allow up to 2 minutes buffer
-                    maxBufferSize: 100 * 1000 * 1000, // 100 MB max buffer
+                    // Increase timeouts for proxy-based streams (proxy adds latency)
+                    fragLoadingTimeOut: 30000, // 30s timeout for fragments  
+                    manifestLoadingTimeOut: 30000, // 30s timeout for manifest
+                    levelLoadingTimeOut: 30000, // 30s timeout for levels
+                    // Minimal buffer settings for instant playback with small chunks
+                    maxBufferLength: 10, // Buffer only 10 seconds ahead
+                    maxMaxBufferLength: 15, // Allow up to 15 seconds max buffer
+                    maxBufferSize: 10 * 1000 * 1000, // 10 MB max buffer
                     maxBufferHole: 0.5, // Tolerate small buffer gaps
-                    // CRITICAL: Minimize initial buffering delay
-                    backBufferLength: 10, // Keep 10s of back buffer
-                    frontBufferFlushThreshold: 600, // Only flush when buffer is huge
-                    // Start playback ASAP with minimal buffer
+                    // Minimal back buffer for faster seeking
+                    backBufferLength: 5, // Keep only 5s of back buffer
+                    frontBufferFlushThreshold: 15, // Flush aggressively to keep buffer small
+                    // Start playback settings - critical for fast start
                     startFragPrefetch: true, // Prefetch first fragment
-                    testBandwidth: true, // Test bandwidth for better quality selection
+                    testBandwidth: false, // Skip bandwidth test for faster start
                     startLevel: -1, // Auto quality selection
-                    // Reduce initial buffering delay to minimum
-                    liveSyncDurationCount: 1, // Start with just 1 fragment
-                    liveMaxLatencyDurationCount: 3, // Very low latency tolerance
-                    // More aggressive fragment loading
-                    maxFragLookUpTolerance: 0.1,
+                    // Fragment loading settings
+                    maxFragLookUpTolerance: 0.25, // More tolerance for fragment lookup
                     progressive: true, // Enable progressive streaming
+                    // Retry settings for proxy reliability
+                    fragLoadingMaxRetry: 6, // More retries for fragments
+                    manifestLoadingMaxRetry: 4,
+                    levelLoadingMaxRetry: 4,
+                    fragLoadingRetryDelay: 1000, // Wait 1s between retries
+                    // Aggressive settings for minimal buffering
+                    liveSyncDurationCount: 2, // Minimal sync buffer
+                    liveMaxLatencyDurationCount: 3,
                     xhrSetup: function (xhr, url) {
                         xhr.withCredentials = false;
                     },
@@ -284,16 +294,6 @@ export default function VideoPlayer({
                 hls.attachMedia(video);
 
                 hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    console.log('[VideoPlayer] HLS Manifest Parsed:', {
-                        audioTracks: hls.audioTracks?.length || 0,
-                        levels: hls.levels?.length || 0,
-                        levelDetails: hls.levels?.map((lvl: any) => ({
-                            height: lvl.height,
-                            width: lvl.width,
-                            bitrate: lvl.bitrate,
-                            url: lvl.url?.[0]
-                        }))
-                    });
 
                     // Check if HLS has multiple audio tracks (internal switching)
                     if (hls.audioTracks && hls.audioTracks.length > 1) {
@@ -309,7 +309,6 @@ export default function VideoPlayer({
 
                     // Internal quality switching from HLS variant levels
                     if (hls.levels && hls.levels.length > 1) {
-                        console.log('[VideoPlayer] Enabling internal quality switching with', hls.levels.length, 'levels');
                         setUseInternalQuality(true);
                         const levelLabels = hls.levels.map((lvl, idx) => {
                             const h = (lvl as any).height as number | undefined;
@@ -319,7 +318,6 @@ export default function VideoPlayer({
                             return { id: idx, label: `Level ${idx + 1}` };
                         });
                         setInternalQualityLevels(levelLabels);
-                        console.log('[VideoPlayer] Quality levels:', levelLabels);
 
                         // Default to highest level (best height/bitrate)
                         let bestLevel = 0;
@@ -337,7 +335,6 @@ export default function VideoPlayer({
                         setCurrentQuality(bestLevel);
                         hls.currentLevel = bestLevel;
                     } else {
-                        console.log('[VideoPlayer] Only', hls.levels?.length || 0, 'level(s) detected, no quality switching');
                         setUseInternalQuality(false);
                         setInternalQualityLevels([]);
                     }
@@ -373,14 +370,8 @@ export default function VideoPlayer({
                     // Always print a JSON snapshot too, because DevTools sometimes renders objects as `{}`.
                     // (e.g. when properties are non-enumerable/getters or get stripped in some builds)
                     if ((data as any)?.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                        console.error('HLS Media Error', baseSnapshot);
-                        console.error('HLS Media Error JSON', JSON.stringify(baseSnapshot));
                     } else if ((data as any)?.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                        console.error('HLS Network Error', baseSnapshot);
-                        console.error('HLS Network Error JSON', JSON.stringify(baseSnapshot));
                     } else {
-                        console.error('HLS Error', baseSnapshot);
-                        console.error('HLS Error JSON', JSON.stringify(baseSnapshot));
                     }
 
                     if ((data as any)?.fatal) {
@@ -395,10 +386,6 @@ export default function VideoPlayer({
                                 const now = Date.now();
                                 const msSinceLast = now - hlsLastRecoveryAtRef.current;
 
-                                console.error('HLS Media Error recovery', {
-                                    count: hlsMediaErrorCountRef.current,
-                                    msSinceLast,
-                                });
 
                                 // Rate-limit recoveries
                                 if (msSinceLast < 1500) return;
@@ -442,9 +429,81 @@ export default function VideoPlayer({
                     hlsRef.current.destroy();
                     hlsRef.current = null;
                 }
-                video.src = processedUrl;
+                
+                console.log('[VideoPlayer] Direct playback mode for:', processedUrl);
+                console.log('[VideoPlayer] Video element:', video);
+                console.log('[VideoPlayer] Video canPlayType mp4:', video.canPlayType('video/mp4'));
+                console.log('[VideoPlayer] Video canPlayType mkv:', video.canPlayType('video/x-matroska'));
+                console.log('[VideoPlayer] Video canPlayType webm:', video.canPlayType('video/webm'));
+                
+                // Detect if it's an MKV file
+                const isMKV = /\.mkv(\?|$)/i.test(processedUrl) || processedUrl.includes('.mkv');
+                
+                if (isMKV) {
+                    console.log('[VideoPlayer] MKV detected, trying direct playback with type hint');
+                    // MKV files: Remove existing children and add source with explicit type
+                    while (video.firstChild) {
+                        video.removeChild(video.firstChild);
+                    }
+                    
+                    const source = document.createElement('source');
+                    source.src = processedUrl;
+                    // Try different MIME types that might help WebView2 recognize the codecs
+                    source.type = 'video/x-matroska; codecs="avc1.42E01E, mp4a.40.2"';
+                    video.appendChild(source);
+                    
+                    // Also try setting video element attributes
+                    video.setAttribute('type', 'video/x-matroska');
+                    video.load();
+                } else {
+                    // Standard video files - simple src assignment
+                    video.removeAttribute('src');
+                    video.src = processedUrl;
+                    video.load();
+                }
+                
+                // Add event listeners to debug what's happening
+                const onLoadedMetadata = () => {
+                    console.log('[VideoPlayer] Metadata loaded');
+                    console.log('[VideoPlayer] Duration:', video.duration);
+                    console.log('[VideoPlayer] VideoWidth:', video.videoWidth);
+                    console.log('[VideoPlayer] VideoHeight:', video.videoHeight);
+                    
+                    // If MKV has 0x0 video dimensions, show helpful error with download link
+                    if (isMKV && video.videoWidth === 0 && video.videoHeight === 0) {
+                        console.error('[VideoPlayer] MKV video track not decoded - WebView2 limitation');
+                        // Extract the actual archive.org URL for download
+                        try {
+                            const urlParams = new URLSearchParams(processedUrl.split('?')[1]);
+                            const actualUrl = urlParams.get('url');
+                            if (actualUrl) {
+                                setError(`MKV format not supported in browser. Download the file to watch: ${actualUrl}`);
+                            } else {
+                                setError('MKV video not supported. Try downloading or use different quality.');
+                            }
+                        } catch {
+                            setError('MKV video not supported. Try downloading or use different quality.');
+                        }
+                    }
+                };
+                
+                const onLoadedData = () => {
+                    console.log('[VideoPlayer] Data loaded, ready to play');
+                };
+                
+                const onCanPlay = () => {
+                    console.log('[VideoPlayer] Can play');
+                };
+                
+                video.addEventListener('loadedmetadata', onLoadedMetadata);
+                video.addEventListener('loadeddata', onLoadedData);
+                video.addEventListener('canplay', onCanPlay);
+                
                 return () => {
                     video.removeEventListener('error', onError);
+                    video.removeEventListener('loadedmetadata', onLoadedMetadata);
+                    video.removeEventListener('loadeddata', onLoadedData);
+                    video.removeEventListener('canplay', onCanPlay);
                     if (cleanupBlobUrl) {
                         URL.revokeObjectURL(cleanupBlobUrl);
                     }
@@ -485,7 +544,14 @@ export default function VideoPlayer({
             // Otherwise call API for audio change
             else {
                 const reqAudio = audio !== undefined ? audio : languageId;
-                newUrl = await getStreamUrl(movieId, episodeId, reqAudio);
+                // Client-side fetch
+                try {
+                    const { fetchStreamClient } = await import('@/lib/api-client');
+                    const data = await fetchStreamClient(movieId, episodeId, reqAudio);
+                    newUrl = data?.videoUrl || null;
+                } catch (e) {
+                }
+
                 if (audio !== undefined) setCurrentAudio(audio);
             }
 
@@ -500,7 +566,6 @@ export default function VideoPlayer({
                 }, 500);
             }
         } catch (e) {
-            console.error("Failed to switch stream", e);
         } finally {
             setIsLoading(false);
         }

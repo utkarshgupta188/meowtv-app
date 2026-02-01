@@ -30,17 +30,13 @@ async function getSecurityKey(retries: number = 3): Promise<{ key: string | null
             try {
                 json = JSON.parse(text);
             } catch (parseErr) {
-                console.warn('[MeowTV] getSecurityKey parse error', { attempt, text: text.slice(0, 200) });
             }
 
             if (json && json.code === 200 && json.data) {
-                console.log('[MeowTV] getSecurityKey ok', { attempt, hasCookie: Boolean(cookie), keyLen: json.data?.length ?? 0 });
                 return { key: json.data, cookie };
             }
 
-            console.warn('[MeowTV] getSecurityKey bad response', { attempt, json, text: text.slice(0, 200) });
         } catch (e) {
-            console.warn('[MeowTV] getSecurityKey failed', { attempt, error: String(e) });
         }
     }
     return { key: null, cookie: null };
@@ -87,7 +83,6 @@ export const MeowTvProvider: Provider = {
                 })) || []
             })).filter((r: HomePageRow) => r.contents.length > 0);
         } catch (e) {
-            console.error(e);
             return [];
         }
     },
@@ -102,11 +97,6 @@ export const MeowTvProvider: Provider = {
             const payload = await res.text();
             const decryptedJson = decryptData(payload, key);
             if (!decryptedJson) {
-                console.warn('[MeowTV] search decrypt failed', {
-                    query,
-                    status: res.status,
-                    sample: payload.slice(0, 200)
-                });
                 return [];
             }
 
@@ -202,19 +192,12 @@ export const MeowTvProvider: Provider = {
 
         // Fetch details to get correct episode/tracks like Kotlin flow
         const details = await fetchDetailsWithKey(movieId, key);
-        if (!details) {
-            console.warn('[MeowTV] fetchStreamUrl details missing');
-        }
         const episodes = details?.episodes || [];
 
         let targetEpisode = episodes.find((ep: any) => ep.id?.toString() === episodeId);
         if (!targetEpisode && episodes.length) {
             targetEpisode = episodes[0];
             episodeId = targetEpisode.id?.toString() || episodeId;
-            console.warn('[MeowTV] episodeId not found; using first episode', { episodeId });
-        }
-        if (!targetEpisode) {
-            console.warn('[MeowTV] no target episode resolved; proceeding with provided episodeId');
         }
 
         const tracks: any[] = targetEpisode?.tracks || [];
@@ -263,14 +246,6 @@ export const MeowTvProvider: Provider = {
                     const payload = await res.text();
                     const decryptedJson = decryptData(payload, key);
                     if (!decryptedJson) {
-                        console.warn('[MeowTV] fetchStreamUrl decrypt failed', {
-                            movieId,
-                            episodeId,
-                            resolution,
-                            status: res.status,
-                            sample: payload.slice(0, 200),
-                            lang: track.languageId
-                        });
                         continue;
                     }
 
@@ -295,15 +270,6 @@ export const MeowTvProvider: Provider = {
                                 return { language: lang, label, url: rawUrl };
                             }).filter((s: any) => Boolean(s.url));
                         }
-                    } else {
-                        console.warn('[MeowTV] fetchStreamUrl no videoUrl', {
-                            movieId,
-                            episodeId,
-                            resolution,
-                            status: res.status,
-                            lang: track.languageId,
-                            decryptedSample: decryptedJson.slice(0, 500)
-                        });
                     }
                 } catch { }
             }

@@ -1,8 +1,11 @@
 import crypto from 'crypto';
 
+// For standalone Tauri builds, hardcode the suffix
+const DEFAULT_CASTLE_SUFFIX = 'T!BgJB';
+
 function deriveKey(apiKeyB64: string): Buffer {
   const apiKeyBytes = Buffer.from(apiKeyB64, 'base64');
-  const KEY_SUFFIX = process.env.CASTLE_SUFFIX || '';
+  const KEY_SUFFIX = process.env.CASTLE_SUFFIX || DEFAULT_CASTLE_SUFFIX;
   const suffixBytes = Buffer.from(KEY_SUFFIX, 'ascii');
 
   const keyMaterial = Buffer.concat([apiKeyBytes, suffixBytes]);
@@ -38,7 +41,6 @@ export function decryptData(encryptedB64: string, apiKeyB64: string): string | n
 
     return decrypted.toString('utf8');
   } catch (error) {
-    console.error('Decryption failed:', error);
     return null;
   }
 }

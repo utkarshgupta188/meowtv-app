@@ -102,11 +102,51 @@ async function handleHlsRequest(request, params) {
             headers['Range'] = rangeHeader;
         }
 
-        const response = await fetch(url, { headers });
+        // Retry logic for flaky upstream servers
+        let response;
+        let lastError;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                response = await fetch(url, { 
+                    headers,
+                    cf: {
+                        cacheTtl: 0,
+                        cacheEverything: false
+                    }
+                });
+                
+                if (response.ok || response.status === 206) {
+                    break; // Success
+                }
+                
+                lastError = `HTTP ${response.status}`;
+                
+                // Don't retry on 404 or client errors
+                if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+                    break;
+                }
+                
+                // Wait before retry
+                if (attempt < 2) {
+                    await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+                }
+            } catch (e) {
+                lastError = e.message;
+                if (attempt < 2) {
+                    await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+                }
+            }
+        }
 
-        if (!response.ok) {
-            return new Response(JSON.stringify({ error: 'Failed to fetch', status: response.status }), {
-                status: response.status,
+        if (!response || !response.ok) {
+            const status = response?.status || 502;
+            return new Response(JSON.stringify({ 
+                error: 'Failed to fetch upstream', 
+                status: status,
+                lastError: lastError,
+                url: url.substring(0, 100) + '...'
+            }), {
+                status: status,
                 headers: {
                     'Content-Type': 'application/json',
                     'Access-Control-Allow-Origin': '*'
@@ -325,6 +365,8 @@ async function handleProxyRequest(request, params) {
     const referer = params.get('referer');
     const cookie = params.get('cookie');
     const uaParam = params.get('ua'); // Fix: Get 'ua' param
+    const apiParam = params.get('api');
+    const callerParam = params.get('caller');
     const range = request.headers.get('range');
 
     try {
@@ -335,10 +377,12 @@ async function handleProxyRequest(request, params) {
         if (referer) headers['Referer'] = referer;
         if (cookie) headers['Cookie'] = cookie;
         if (range) headers['Range'] = range;
+        if (apiParam) headers['api'] = apiParam;
+        if (callerParam) headers['caller'] = callerParam;
 
         // Forward critical headers for Auth/POST requests
         // Added 'cookie' and 'referer' to allow passing them via headers instead of query params
-        const allowedHeaders = ['content-type', 'x-requested-with', 'accept', 'origin', 'authorization', 'cookie', 'referer'];
+        const allowedHeaders = ['content-type', 'x-requested-with', 'accept', 'origin', 'authorization', 'cookie', 'referer', 'api', 'caller'];
         for (const h of allowedHeaders) {
             const v = request.headers.get(h);
             if (v) headers[h] = v;
@@ -347,6 +391,8 @@ async function handleProxyRequest(request, params) {
         // Params override headers (backward compatibility)
         if (referer) headers['Referer'] = referer;
         if (cookie) headers['Cookie'] = cookie;
+        if (apiParam) headers['api'] = apiParam;
+        if (callerParam) headers['caller'] = callerParam;
 
         // Force Origin to match Referer (or target) to prevent "Vercel" origin blocking
         try {

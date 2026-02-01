@@ -1,21 +1,21 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { setProviderAction, getProviderNameAction } from '@/lib/api';
+import { getProviderFromCookie, setProviderCookie } from '@/lib/api-client';
 
 export default function ProviderSwitcher() {
     const [provider, setProvider] = useState<string>('MeowTV');
 
     useEffect(() => {
-        getProviderNameAction().then(setProvider);
+        setProvider(getProviderFromCookie());
     }, []);
 
-    const handleChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         const newProvider = e.target.value;
         setProvider(newProvider);
-        await setProviderAction(newProvider);
+        setProviderCookie(newProvider);
 
-        // Hard navigation so server components pick up the new cookie immediately.
+        // Hard navigation so components pick up the new cookie immediately.
         window.location.assign('/');
     };
 

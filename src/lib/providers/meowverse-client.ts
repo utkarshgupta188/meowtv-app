@@ -64,12 +64,10 @@ async function bypass(mainUrl: string, useProxy: boolean = false): Promise<strin
         let retries = 0;
         const maxRetries = 10;
 
-        console.log(`[CNC Client] Starting bypass (${useProxy ? 'Proxy' : 'Direct'})...`);
         while (retries < maxRetries) {
             const fetchFn = useProxy ? proxiedFetch : fetch;
             // Add cache buster to prevent cached responses (missing Set-Cookie)
             const bypassUrl = `${mainUrl}/tv/p.php?_=${Date.now()}`;
-            console.log(`[CNC Client] Fetching bypass URL: ${bypassUrl}`);
 
             const res = await fetchFn(bypassUrl, {
                 method: 'POST',
@@ -93,7 +91,6 @@ async function bypass(mainUrl: string, useProxy: boolean = false): Promise<strin
                     : res.headers.get('set-cookie');
 
                 if (setCookie) {
-                    console.log(`[CNC Client] Bypass cookie received.`);
                 }
 
                 if (setCookie) {
@@ -107,14 +104,11 @@ async function bypass(mainUrl: string, useProxy: boolean = false): Promise<strin
                             cachedDirectCookie = cookieVal;
                             cacheDirectTimestamp = Date.now();
                         }
-                        console.log(`[CNC Client] Bypass successful! (${useProxy ? 'Proxy' : 'Direct'})`);
                         return cookieVal;
                     } else {
-                        console.warn(`[CNC Client] Set-Cookie found but t_hash_t NOT found in it.`);
                     }
                 }
             } else {
-                console.log(`[CNC Client] Bypass check failed (Attempt ${retries + 1}). Status: ${res.status}. Response start: ${verifyCheck.substring(0, 100)}`);
             }
 
             retries++;
@@ -123,7 +117,6 @@ async function bypass(mainUrl: string, useProxy: boolean = false): Promise<strin
 
         throw new Error('Bypass failed after max retries');
     } catch (e) {
-        console.error('[CNC Client] Bypass error DETAILS:', e);
         if (useProxy) cachedProxyCookie = null;
         else cachedDirectCookie = null;
         throw e;
@@ -131,7 +124,6 @@ async function bypass(mainUrl: string, useProxy: boolean = false): Promise<strin
 }
 
 export async function fetchStreamUrlClient(movieId: string, episodeId: string, audioLang?: string): Promise<VideoResponse | null> {
-    console.log('[CNC Client] fetchStreamUrl (CLIENT VERSION)');
     try {
         const cookieValue = await bypass(MAIN_URL, true); // PROXIED
         const time = Math.floor(Date.now() / 1000);
@@ -169,7 +161,7 @@ export async function fetchStreamUrlClient(movieId: string, episodeId: string, a
                     body: `lang=${audioParam}`
                 });
                 streamCookies = mergeCookies(streamCookies, langRes.headers.get('x-proxied-set-cookie') || langRes.headers.get('set-cookie'));
-            } catch (e) { console.error(e); }
+            } catch (e) { }
         }
 
         // POST play.php
@@ -192,7 +184,7 @@ export async function fetchStreamUrlClient(movieId: string, episodeId: string, a
                 const playData = JSON.parse(playText);
                 if (playData && playData.h) hashParams = `&${playData.h}`;
             } catch { }
-        } catch (e) { console.error(e); }
+        } catch (e) { }
 
         // GET play.php
         if (hashParams) {
@@ -203,7 +195,7 @@ export async function fetchStreamUrlClient(movieId: string, episodeId: string, a
                     redirect: 'manual'
                 });
                 streamCookies = mergeCookies(streamCookies, playGetRes.headers.get('x-proxied-set-cookie') || playGetRes.headers.get('set-cookie'));
-            } catch (e) { console.error(e); }
+            } catch (e) { }
         }
 
         // Fetch Playlist
@@ -216,7 +208,7 @@ export async function fetchStreamUrlClient(movieId: string, episodeId: string, a
             const playlistRes = await proxiedFetch(url, { headers: { ...HEADERS, 'Cookie': streamCookies, 'Referer': `${NEW_URL}/home` } });
             resText = await playlistRes.text();
             streamCookies = mergeCookies(streamCookies, playlistRes.headers.get('x-proxied-set-cookie') || playlistRes.headers.get('set-cookie'));
-        } catch (e) { console.error(e); }
+        } catch (e) { }
 
         if (!resText || /Video ID not found!/i.test(resText)) {
             const url2 = `${MAIN_URL}/tv/playlist.php?id=${episodeId}&t=${audioParam}&tm=${time}`;
@@ -226,7 +218,7 @@ export async function fetchStreamUrlClient(movieId: string, episodeId: string, a
                 streamCookies = mergeCookies(streamCookies, fallbackRes.headers.get('x-proxied-set-cookie') || fallbackRes.headers.get('set-cookie'));
                 playlistBaseUrl = MAIN_URL;
                 playlistReferer = `${MAIN_URL}/`;
-            } catch (e) { console.error(e); }
+            } catch (e) { }
         }
 
         let playlist;

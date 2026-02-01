@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import VideoPlayer, { VideoPlayerProps } from '@/components/VideoPlayer';
-import { fetchStreamUrlClient } from '@/lib/providers/meowverse-client';
+import { fetchStreamClient } from '@/lib/api-client';
 
 interface WatchClientProps extends Omit<VideoPlayerProps, 'initialUrl' | 'movieId' | 'episodeId'> {
     initialVideoData: {
@@ -32,39 +32,37 @@ export default function WatchClient({
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        // If we already have data (Server Side Fetch), just use it.
+        // If we already have data (e.g. passed from SSR or previous load), use it
         if (initialVideoData) {
             setLoading(false);
             return;
         }
 
-        // If no data and MeowVerse, fetch on client
-        if (providerName === 'MeowVerse') {
-            console.log('[WatchClient] Fetching stream on client for MeowVerse...');
-            setLoading(true);
-            fetchStreamUrlClient(movieId, episodeId, typeof languageId === 'string' ? languageId : undefined)
-                .then(data => {
-                    if (data) {
-                        setVideoData({
-                            videoUrl: data.videoUrl,
-                            subtitles: data.subtitles,
-                            qualities: data.qualities,
-                            audioTracks: [] // populated from props/wrapper usually
-                        });
-                    } else {
-                        setError('Failed to load stream (Client).');
-                    }
-                })
-                .catch(err => {
-                    console.error(err);
-                    setError('Error loading stream.');
-                })
-                .finally(() => setLoading(false));
-        } else {
-            // Should have been fetched on server
-            setLoading(false);
-            setError('Stream not available.');
-        }
+        // For standalone builds, fetch stream client-side for ALL providers
+        setLoading(true);
+        setError(null);
+
+        fetchStreamClient(movieId, episodeId, languageId)
+            .then(data => {
+                if (data && data.videoUrl) {
+                    setVideoData({
+                        videoUrl: data.videoUrl,
+                        subtitles: data.subtitles?.map((s: any) => ({
+                            title: s.label || s.title || s.language || 'Subtitles',
+                            url: s.url,
+                            language: s.language || 'en'
+                        })) || [],
+                        qualities: data.qualities || [],
+                        audioTracks: []
+                    });
+                } else {
+                    setError('Failed to load stream.');
+                }
+            })
+            .catch(err => {
+                setError('Error loading stream.');
+            })
+            .finally(() => setLoading(false));
     }, [providerName, movieId, episodeId, languageId, initialVideoData]);
 
     if (loading) {

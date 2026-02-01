@@ -1189,3 +1189,68 @@ select:focus-visible {
     transform: translateY(-50%) scale(1.5);
   }
 }
+
+/* ==================== TITLE BAR (Tauri Desktop App) ==================== */
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 8px;
+  background: transparent;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.titlebar-icon {
+  font-size: 16px;
+  margin-right: 8px;
+}
+
+.titlebar-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.titlebar-spacer {
+  flex: 1;
+}
+
+.titlebar-buttons {
+  display: flex;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.titlebar-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.titlebar-button--close:hover {
+  background: #e81123;
+  color: white;
+}
+
+.titlebar-button:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.titlebar-button svg {
+  pointer-events: none;
+}

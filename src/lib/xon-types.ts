@@ -34,6 +34,9 @@ export interface Details {
 	backdrop?: string;
 	description?: string;
 	episodes?: EpisodeItem[];
+	episodeNumber?: number;
+	seasonNumber?: number;
+	showId?: string;
 }
 
 export interface StreamQuality {

@@ -249,22 +249,16 @@ async function authenticateAndGetSettings(): Promise<void> {
 }
 
 async function fetchJson<T>(url: string, headers?: Record<string, string>): Promise<T> {
-	let fetchUrl = url;
-	let fetchHeaders = headers;
-	
-	if (IS_BROWSER) {
-		// In browser, route through proxy worker with auth headers as query params
-		const params: Record<string, string> = {
-			referer: mainUrl,
-		};
-		if (headers?.api) params.api = headers.api;
-		if (headers?.caller) params.caller = headers.caller;
-		fetchUrl = getSimpleProxyUrl(url, params);
-		fetchHeaders = undefined; // Headers are passed as query params
-	}
+	// XON API calls should NOT be proxied - they need direct access with auth headers
+	const fetchUrl = url;
+	const fetchHeaders = headers || {};
 	
 	try {
-		const res = await fetch(fetchUrl, { headers: fetchHeaders, cache: 'no-store' });
+		const res = await fetch(fetchUrl, { 
+			headers: fetchHeaders, 
+			cache: 'no-store',
+			mode: 'cors' // Enable CORS for direct API calls
+		});
 		if (!res.ok) {
 			const body = await res.text().catch(() => '');
 			throw new Error(`HTTP ${res.status} for ${url}${body ? `: ${body.slice(0, 200)}` : ''}`);

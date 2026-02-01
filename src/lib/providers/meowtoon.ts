@@ -74,37 +74,44 @@ export const MeowToonProvider: Provider = {
         if (page < 1) page = 1;
         if (page > 1) return [];
 
+        let kartoRows: HomePageRow[] = [];
+        
         try {
-            const xonRows = await fetchXonHome().catch((err) => {
+            const [showsData, moviesData, popShowsData, popMoviesData] = await Promise.all([
+                fetchJson<KartoonsListResponse<any[]>>(`${MAIN_URL}/api/shows/?page=1&limit=20`),
+                fetchJson<KartoonsListResponse<any[]>>(`${MAIN_URL}/api/movies/?page=1&limit=20`),
+                fetchJson<KartoonsListResponse<any[]>>(`${MAIN_URL}/api/popularity/shows?limit=15&period=day`),
+                fetchJson<KartoonsListResponse<any[]>>(`${MAIN_URL}/api/popularity/movies?limit=15&period=day`)
+            ]);
+
+            const mapToItem = (item: any, type: 'series' | 'movie'): ContentItem => ({
+                id: `${type}-${item?.slug ?? item?.id}`,
+                title: item?.title ?? '',
+                coverImage: normalizeImage(item?.image),
+                type
+            });
+
+            kartoRows = [
+                { name: 'Popular Shows', contents: (popShowsData.data || []).map((i: any) => mapToItem(i, 'series')) },
+                { name: 'Popular Movies', contents: (popMoviesData.data || []).map((i: any) => mapToItem(i, 'movie')) },
+                { name: 'Shows', contents: (showsData.data || []).map((i: any) => mapToItem(i, 'series')) },
+                { name: 'Movies', contents: (moviesData.data || []).map((i: any) => mapToItem(i, 'movie')) }
+            ].filter(r => r.contents.length > 0);
+        } catch (kartErr) {
+            console.warn('[MeowToon] Kartoons fetch failed:', kartErr);
+        }
+
+        // Try to fetch XON with a timeout - don't block Kartoons content
+        try {
+            const xonRows = await Promise.race([
+                fetchXonHome(),
+                new Promise<never>((_, reject) => 
+                    setTimeout(() => reject(new Error('XON timeout')), 5000)
+                )
+            ]).catch((err) => {
                 console.warn('[MeowToon] XON fetch failed:', err?.message || err);
                 return [];
             });
-
-            let kartoRows: HomePageRow[] = [];
-            try {
-                const [showsData, moviesData, popShowsData, popMoviesData] = await Promise.all([
-                    fetchJson<KartoonsListResponse<any[]>>(`${MAIN_URL}/api/shows/?page=1&limit=20`),
-                    fetchJson<KartoonsListResponse<any[]>>(`${MAIN_URL}/api/movies/?page=1&limit=20`),
-                    fetchJson<KartoonsListResponse<any[]>>(`${MAIN_URL}/api/popularity/shows?limit=15&period=day`),
-                    fetchJson<KartoonsListResponse<any[]>>(`${MAIN_URL}/api/popularity/movies?limit=15&period=day`)
-                ]);
-
-                const mapToItem = (item: any, type: 'series' | 'movie'): ContentItem => ({
-                    id: `${type}-${item?.slug ?? item?.id}`,
-                    title: item?.title ?? '',
-                    coverImage: normalizeImage(item?.image),
-                    type
-                });
-
-                kartoRows = [
-                    { name: 'Popular Shows', contents: (popShowsData.data || []).map((i: any) => mapToItem(i, 'series')) },
-                    { name: 'Popular Movies', contents: (popMoviesData.data || []).map((i: any) => mapToItem(i, 'movie')) },
-                    { name: 'Shows', contents: (showsData.data || []).map((i: any) => mapToItem(i, 'series')) },
-                    { name: 'Movies', contents: (moviesData.data || []).map((i: any) => mapToItem(i, 'movie')) }
-                ].filter(r => r.contents.length > 0);
-            } catch (kartErr) {
-                // If Kartoons endpoints fail or time out, still return Xon rows.
-            }
 
             const xonMapped: HomePageRow[] = xonRows.map((row) => ({
                 name: `Xon • ${row.name}`,
@@ -119,8 +126,8 @@ export const MeowToonProvider: Provider = {
             console.log('[MeowToon] Kartoons rows:', kartoRows.length, 'XON rows:', xonMapped.length);
             return [...kartoRows, ...xonMapped];
         } catch (e) {
-            if (isAbortError(e)) return [];
-            return [];
+            console.warn('[MeowToon] Error combining rows:', e);
+            return kartoRows;
         }
     },
 

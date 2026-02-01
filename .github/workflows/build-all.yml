@@ -90,6 +90,33 @@ jobs:
     - name: Build Android APK
       run: npx @tauri-apps/cli android build
 
+    - name: Sign APK
+      if: github.event_name != 'pull_request'
+      run: |
+        # Create keystore if secrets are available
+        if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+          
+          # Sign the APK
+          ${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | tail -n 1)/apksigner sign \
+            --ks release.keystore \
+            --ks-key-alias meowtv \
+            --ks-pass pass:"${{ secrets.KEYSTORE_PASSWORD }}" \
+            --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
+            --out src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-signed.apk \
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
+          
+          # Verify signature
+          ${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | tail -n 1)/apksigner verify \
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-signed.apk
+          
+          echo "APK signed successfully"
+          rm release.keystore
+        else
+          echo "No keystore found in secrets, skipping signing"
+          echo "To enable signing, add ANDROID_KEYSTORE_BASE64, KEYSTORE_PASSWORD, and KEY_PASSWORD to GitHub secrets"
+        fi
+
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:

@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "identifier": "com.meowtv.app",
   "build": {
-    "frontendDist": "../out",
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"

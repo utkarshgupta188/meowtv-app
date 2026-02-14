@@ -3,8 +3,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   /* config options here */
   reactCompiler: true,
-  // Tauri runs a full Next.js server, not static export
-  // No output: "export", keep as standard server mode
+  // Keep server mode for dynamic API routes (/api/proxy, /api/hls)
+  // Tauri will connect to devUrl: http://localhost:3000
   trailingSlash: true,
   skipTrailingSlashRedirect: true,
 };

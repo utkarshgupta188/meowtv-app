@@ -27,7 +27,7 @@ export default function ProviderSwitcher() {
             aria-label="Provider"
         >
             <option value="MeowTV">MeowTV</option>
-            <option value="MeowVerse">MeowVerse</option>
+            {/* <option value="MeowVerse">MeowVerse</option> */}
             <option value="MeowToon">MeowToon</option>
         </select>
     );

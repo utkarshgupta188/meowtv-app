@@ -88,7 +88,34 @@ jobs:
       run: npx @tauri-apps/cli android init --ci
 
     - name: Build Android APK
-      run: npx @tauri-apps/cli android build --apk
+      run: npx @tauri-apps/cli android build
+
+    - name: Sign APK
+      if: github.event_name != 'pull_request'
+      run: |
+        # Create keystore if secrets are available
+        if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+          
+          # Sign the APK
+          ${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | tail -n 1)/apksigner sign \
+            --ks release.keystore \
+            --ks-key-alias meowtv \
+            --ks-pass pass:"${{ secrets.KEYSTORE_PASSWORD }}" \
+            --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
+            --out src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-signed.apk \
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
+          
+          # Verify signature
+          ${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | tail -n 1)/apksigner verify \
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-signed.apk
+          
+          echo "APK signed successfully"
+          rm release.keystore
+        else
+          echo "No keystore found in secrets, skipping signing"
+          echo "To enable signing, add ANDROID_KEYSTORE_BASE64, KEYSTORE_PASSWORD, and KEY_PASSWORD to GitHub secrets"
+        fi
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
@@ -100,7 +127,8 @@ jobs:
   create-release:
     needs: [build-windows, build-android]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
     
     steps:
     - name: Download Windows artifacts
@@ -115,22 +143,46 @@ jobs:
         name: meowtv-android
         path: dist/android
 
+    - name: Get version from package.json
+      id: package-version
+      run: echo "VERSION=v0.1.0" >> $GITHUB_OUTPUT
+
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
+        tag_name: ${{ steps.package-version.outputs.VERSION }}-${{ github.run_number }}
+        name: MeowTV ${{ steps.package-version.outputs.VERSION }} Build ${{ github.run_number }}
+        draft: false
+        prerelease: false
+        generate_release_notes: true
         files: |
           dist/windows/**/*
           dist/android/**/*
         body: |
-          ## MeowTV Release
+          ## 🐱 MeowTV - Stream Your Favorite Shows
           
-          ### Windows
-          - `.msi` - Windows Installer (recommended)
-          - `.exe` - NSIS Installer
+          **Build:** `${{ github.run_number }}`
+          **Commit:** `${{ github.sha }}`
           
-          ### Android
-          - `.apk` - Universal APK (ARM64 + ARMv7)
+          ### 📥 Downloads
           
-          Install and enjoy streaming!
+          #### Windows 🪟
+          - **MeowTV_0.1.0_x64_en-US.msi** - Windows Installer (recommended)
+          - **MeowTV_0.1.0_x64-setup.exe** - NSIS Installer
+          
+          #### Android 📱
+          - **app-universal-release-unsigned.apk** - Universal APK (works on all devices)
+            - Supports: ARM64, ARMv7, x86, x86_64
+            - Enable "Install from unknown sources" to install
+          
+          ### 🎬 Features
+          - Multi-provider streaming (MeowTV, MeowVerse, MeowToon)
+          - HLS video playback with adaptive quality
+          - Search across all providers
+          - Episode/season navigation
+          - Custom video player with Plyr
+          
+          ---
+          Install and start streaming! 🚀
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

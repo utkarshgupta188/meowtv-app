@@ -1,5 +1,6 @@
 import { Provider, HomePageRow, ContentItem, MovieDetails, Episode, Season, VideoResponse } from './types';
 import { fetchHome as fetchXonHome, search as searchXon, fetchDetails as fetchXonDetails, fetchStream as fetchXonStream } from '../xon';
+import { getSimpleProxyUrl } from '../proxy-config';
 
 // Built from the Android provider in `Kartoons/`.
 const MAIN_URL = 'https://api.kartoons.fun';
@@ -34,12 +35,29 @@ function isAbortError(err: any): boolean {
     return name === 'AbortError' || code === 20;
 }
 
-async function fetchJson<T>(url: string, timeoutMs: number = 8_000): Promise<T> {
+async function fetchJson<T>(url: string, timeoutMs: number = 8_000, nextConfig?: RequestInit): Promise<T> {
     // Fast-fail so SSR doesn't hang on blocked networks.
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        const res = await fetch(url, { cache: 'no-store', signal: controller.signal });
+        // Use proxy to bypass 403 blocking (Cloudflare/Geoblock)
+        let proxyUrl = getSimpleProxyUrl(url);
+
+        // On Server: Fetch directly (bypass proxy) to ensure Auth headers work and avoid relative URL issues
+        if (typeof window === 'undefined') {
+            proxyUrl = url;
+        }
+        const res = await fetch(proxyUrl, {
+            ...nextConfig, // Apply cache/next config
+            signal: controller.signal,
+            headers: {
+                ...nextConfig?.headers,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
+                'Referer': 'https://kartoons.fun/',
+                'Origin': 'https://kartoons.fun',
+                'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJtZW93dGVzdCIsImV4cCI6MTc3MTUyMjgxM30.fkB-98A4sskOW2Phx4nTe75cVMfgQwC45TBaab0weQM'
+            }
+        });
         if (!res.ok) {
             const body = await res.text().catch(() => '');
             throw new Error(`HTTP ${res.status} for ${url}${body ? `: ${body.slice(0, 200)}` : ''}`);
@@ -75,7 +93,10 @@ export const MeowToonProvider: Provider = {
         if (page > 1) return [];
 
         try {
-            const xonRows = await fetchXonHome().catch(() => []);
+            const xonRows = await fetchXonHome().catch((err) => {
+                console.error('[MeowToon] Xon fetchHome failed:', err);
+                return [];
+            });
 
             let kartoRows: HomePageRow[] = [];
             try {
@@ -101,6 +122,8 @@ export const MeowToonProvider: Provider = {
                 ].filter(r => r.contents.length > 0);
             } catch (kartErr) {
                 // If Kartoons endpoints fail or time out, still return Xon rows.
+                const label = isAbortError(kartErr) ? 'timeout/abort' : 'error';
+                console.warn(`[MeowToon] Kartoons home ${label}:`, kartErr);
             }
 
             const xonMapped: HomePageRow[] = xonRows.map((row) => ({

@@ -1,8 +1,8 @@
 import { VideoResponse } from './types';
 import { getHlsProxyUrl, getSimpleProxyUrl, PROXY_WORKER_URL } from '../proxy-config';
 
-const MAIN_URL = 'https://net20.cc';
-const NEW_URL = 'https://net51.cc';
+const MAIN_URL = 'https://net22.cc';
+const NEW_URL = 'https://net52.cc';
 
 const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',

@@ -40,7 +40,7 @@ export default {
 async function handleHlsRequest(request, params) {
     const url = params.get('url');
     const concat = params.get('concat'); // url1|url2|url3
-    const referer = params.get('referer') || 'https://net51.cc/';
+    const referer = params.get('referer') || 'https://net52.cc/';
     const cookie = params.get('cookie') || 'hd=on';
     const decryptParam = params.get('decrypt');
     const kindParam = (params.get('kind') || '').toLowerCase(); // 'playlist' | 'seg'
